@@ -1,0 +1,44 @@
+# Executables and Libraries
+# ビルド時に生成される実行ファイルを除外します。
+# Windows (.exe)、macOS/Linux (ファイル名のみ)
+*.exe
+*.dll
+*.so
+*.o
+
+# Build artifacts
+# Goのビルドキャッシュとテストキャッシュを除外します。
+# go build で生成される一時的なファイルやディレクトリ
+/bin/
+/pkg/
+
+# Test artifacts
+# テスト結果やカバレッジレポートを除外します。
+# go test -c で生成されるテストバイナリも含む
+*.test
+*.out
+/test-reports/
+
+# IDE/Editor Specific Files
+# 一般的なIDEやエディタの一時ファイルや設定ファイルを除外します。
+# Visual Studio Code
+.vscode/
+
+# JetBrains IDEs (GoLand, IntelliJ)
+.idea/
+
+# macOS / Linux system files
+.DS_Store
+
+# Dependencies and Vendoring
+# Go Modules を使用している場合、/vendor ディレクトリは通常無視されます。
+# プロジェクトによっては vendoring を使用しない場合もあります。
+/vendor/
+
+# Environment and Configuration Files
+# 環境変数や認証情報を含む可能性のあるファイルを無視します。
+# プロジェクト固有の設定ファイルを無視する場合はここに追加します。
+.env
+config.yaml.bak
+# ...
+/go-utils.iml
