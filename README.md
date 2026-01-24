@@ -1,4 +1,4 @@
-# 🛡️ NetArmor
+# 🛡️ Net Armor
 
 [![Language](https://img.shields.io/badge/Language-Go-blue)](https://golang.org/)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/shouni/netarmor)](https://golang.org/)
@@ -7,7 +7,7 @@
 
 ## 💡 概要 (About)— 鉄壁のネットワーク防御と回復力を提供する高信頼性ユーティリティ
 
-**`NetArmor`** は、Go言語アプリケーションの外部通信における「安定性」と「安全性」を強化するためのネットワークユーティリティキットです。
+**Net Armor** は、Go言語アプリケーションの外部通信における「安定性」と「安全性」を強化するためのネットワークユーティリティキットです。
 
 一時的なネットワークエラーに対する指数バックオフリトライ機能と、SSRF (Server-Side Request Forgery) や DNS Rebinding 攻撃からインフラを保護するセキュリティ機能を提供します。
 
