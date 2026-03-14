@@ -93,7 +93,7 @@ func NewSafeHTTPClient(timeout time.Duration) *http.Client {
 		}
 
 		// 接続直前に名前解決を行い、解決されたIPを即座にチェックする (TOCTOU対策)
-		ips, err := net.LookupIP(host)
+		ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
 		if err != nil {
 			return nil, err
 		}
