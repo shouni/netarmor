@@ -69,10 +69,8 @@ func newBackOffPolicy(ctx context.Context, cfg Config) backoff.BackOff {
 }
 
 // Do は指数バックオフとカスタムエラー判定を使用して操作をリトライします。
+// ctx には nil ではない context.Context を渡してください。
 func Do(ctx context.Context, cfg Config, operationName string, op Operation, shouldRetryFn ShouldRetryFunc) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	if op == nil {
 		return ErrNilOperation
 	}
