@@ -21,15 +21,6 @@
 
 ---
 
-## 🛠️ インストール
-
-```bash
-go get github.com/shouni/netarmor
-
-```
-
----
-
 ## 📦 パッケージ構成 (Package Structure)
 
 | パッケージ | 説明 | 主な提供機能 |
