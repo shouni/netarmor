@@ -106,4 +106,29 @@ func TestDo(t *testing.T) {
 			t.Errorf("context.Canceled を期待していましたが、異なります: %v", err)
 		}
 	})
+
+	t.Run("成功: nil Context は Background として扱われること", func(t *testing.T) {
+		calls := 0
+		op := func() error {
+			calls++
+			return nil
+		}
+
+		err := Do(nil, cfg, "TestOp", op, nil)
+
+		if err != nil {
+			t.Errorf("期待しないエラーが発生しました: %v", err)
+		}
+		if calls != 1 {
+			t.Errorf("試行回数が不正です: 期待 1, 実績 %d", calls)
+		}
+	})
+
+	t.Run("失敗: nil Operation は即座にエラーになること", func(t *testing.T) {
+		err := Do(ctx, cfg, "TestOp", nil, nil)
+
+		if !errors.Is(err, ErrNilOperation) {
+			t.Errorf("ErrNilOperation を期待していましたが、異なります: %v", err)
+		}
+	})
 }

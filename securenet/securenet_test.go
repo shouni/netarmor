@@ -34,6 +34,8 @@ func TestIsSecureServiceURL(t *testing.T) {
 		{"InvalidURL_ParseError", "://invalid-url", false},
 		{"EmptyURL", "", false},
 		{"NoScheme", "example.com", false},
+		{"HTTPS_EmptyHost", "https:", false},
+		{"HTTPS_EmptyHostWithSlashes", "https://", false},
 	}
 
 	for _, tt := range tests {
@@ -63,6 +65,10 @@ func TestIsSafeURL(t *testing.T) {
 		{"HTTP_127.0.0.1_Restricted", "http://127.0.0.1:8080/secret", false, "制限されたネットワークへのアクセスを検知"},
 		{"HTTP_PrivateIP_10.0.0.1", "http://10.0.0.1/internal", false, "制限されたネットワークへのアクセスを検知"},
 		{"HTTP_PrivateIP_192.168.1.1", "http://192.168.1.1/router", false, "制限されたネットワークへのアクセスを検知"},
+		{"HTTP_UnspecifiedIP", "http://0.0.0.0/admin", false, "制限されたネットワークへのアクセスを検知"},
+		{"HTTP_CGNAT", "http://100.64.0.1/internal", false, "制限されたネットワークへのアクセスを検知"},
+		{"HTTP_BenchmarkNetwork", "http://198.18.0.1/test", false, "制限されたネットワークへのアクセスを検知"},
+		{"HTTP_IPv6Multicast", "http://[ff02::1]/test", false, "制限されたネットワークへのアクセスを検知"},
 		{"FTP_InvalidScheme", "ftp://example.com/file", false, "不許可スキーム"},
 		{"EmptyHost", "http://", false, "ホストが空です"},
 		{"InvalidURL", "://invalid", false, "URLパース失敗"},
@@ -102,6 +108,17 @@ func TestNewSafeHTTPClient(t *testing.T) {
 		require.NotNil(t, client)
 		assert.Equal(t, timeout, client.Timeout)
 		assert.NotNil(t, client.Transport)
+	})
+
+	t.Run("ProxyFromEnvironmentDisabled", func(t *testing.T) {
+		t.Setenv("HTTP_PROXY", "http://127.0.0.1:8888")
+		t.Setenv("HTTPS_PROXY", "http://127.0.0.1:8888")
+
+		client := securenet.NewSafeHTTPClient(2 * time.Second)
+		transport, ok := client.Transport.(*http.Transport)
+
+		require.True(t, ok)
+		assert.Nil(t, transport.Proxy)
 	})
 
 	t.Run("BlockLoopbackConnection", func(t *testing.T) {

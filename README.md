@@ -4,6 +4,7 @@
 [![Go Version](https://img.shields.io/github/go-mod/go-version/shouni/netarmor)](https://golang.org/)
 [![GitHub tag (latest by date)](https://img.shields.io/github/v/tag/shouni/netarmor)](https://github.com/shouni/netarmor/tags)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Status](https://img.shields.io/badge/Status-Completed-brightgreen)](#)
 
 ## 💡 概要 (About)— 鉄壁のネットワーク防御と回復力を提供する高信頼性ユーティリティ
 
@@ -14,7 +15,7 @@
 ## ✨ 特徴
 
 * **堅牢なリトライ (`retry`)**: `backoff/v4` をベースに、Context キャンセルや最大試行回数を直感的に扱えるインターフェースを提供。
-* **強力な防御 (`securenet`)**: HTTP クライアントの Transport 層で接続直前に IP アドレスを検証。DNS Rebinding 等の TOCTOU 攻撃を物理的に遮断します。
+* **強力な防御 (`securenet`)**: HTTP クライアントの Transport 層で接続直前に IP アドレスを検証し、検証済み IP に接続します。DNS Rebinding 等の TOCTOU 攻撃を遮断します。
 * **クラウド対応**: HTTP/HTTPS だけでなく、`gs://` (GCS) や `s3://` (S3) といったクラウドストレージ用スキームの検証にも対応。
 * **モジュール性**: 各パッケージは独立しており、必要な機能のみをインポートして利用可能です。
 
@@ -43,6 +44,7 @@ go get github.com/shouni/netarmor
 ### 1. 安全な HTTP リクエスト (`securenet`)
 
 DNS Rebinding 攻撃を防ぐため、接続を確立する直前に名前解決を行い、解決された IP アドレスがプライベート範囲でないか検証します。
+安全な HTTP クライアントは環境変数の `HTTP_PROXY` / `HTTPS_PROXY` を使用しません。
 
 ```go
 import (
@@ -58,6 +60,23 @@ resp, err := client.Get("https://api.example.com/data")
 
 // 安全ではないURL（例：内部ネットワークへの攻撃試行）は、DialContext層で遮断されます
 _, err = client.Get("http://169.254.169.254/latest/meta-data/")
+
+```
+
+URL の静的検証に timeout やキャンセルを適用したい場合は、`IsSafeURLContext` を使用できます。
+
+```go
+import (
+    "context"
+    "time"
+
+    "github.com/shouni/netarmor/securenet"
+)
+
+ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+defer cancel()
+
+safe, err := securenet.IsSafeURLContext(ctx, "https://api.example.com/data")
 
 ```
 
@@ -96,11 +115,15 @@ err := retry.Do(
 * プライベート IP アドレス範囲 (RFC 1918)
 * ループバックアドレス (localhost, 127.0.0.1, ::1)
 * リンクローカルアドレス (169.254.0.0/16 等)
+* 未指定アドレス (0.0.0.0, ::)
+* Carrier-grade NAT 範囲 (100.64.0.0/10)
+* ベンチマーク用ネットワーク (198.18.0.0/15)
+* マルチキャスト、予約済みアドレス範囲
+
+`IsSecureServiceURL` は HTTPS URL またはローカル開発用 HTTP URL を許可しますが、ホスト名が空の URL は拒否します。
 
 ---
 
 ### 📜 ライセンス (License)
 
 このプロジェクトは [MIT License](https://opensource.org/licenses/MIT) の下で公開されています。
-
----
