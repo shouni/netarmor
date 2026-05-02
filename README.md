@@ -4,6 +4,8 @@
 [![Go Version](https://img.shields.io/github/go-mod/go-version/shouni/netarmor)](https://golang.org/)
 [![GitHub tag (latest by date)](https://img.shields.io/github/v/tag/shouni/netarmor)](https://github.com/shouni/netarmor/tags)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Go Report Card](https://goreportcard.com/badge/github.com/shouni/netarmor)](https://goreportcard.com/report/github.com/shouni/netarmor)
+[![Go Reference](https://pkg.go.dev/badge/github.com/shouni/netarmor.svg)](https://pkg.go.dev/github.com/shouni/netarmor)
 [![Status](https://img.shields.io/badge/Status-Completed-brightgreen)](#)
 
 ## 💡 概要 (About)— 鉄壁のネットワーク防御と回復力を提供する高信頼性ユーティリティ
