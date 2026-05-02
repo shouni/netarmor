@@ -2,6 +2,7 @@ package retry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -13,6 +14,8 @@ const (
 	InitialBackoffInterval = 5 * time.Second
 	MaxBackoffInterval     = 30 * time.Second
 )
+
+var ErrNilOperation = errors.New("retry operation is nil")
 
 // Operation はリトライ可能な処理を表す関数です。
 type Operation func() error
@@ -66,7 +69,12 @@ func newBackOffPolicy(ctx context.Context, cfg Config) backoff.BackOff {
 }
 
 // Do は指数バックオフとカスタムエラー判定を使用して操作をリトライします。
+// ctx には nil ではない context.Context を渡してください。
 func Do(ctx context.Context, cfg Config, operationName string, op Operation, shouldRetryFn ShouldRetryFunc) error {
+	if op == nil {
+		return ErrNilOperation
+	}
+
 	cfg = cfg.withDefaults()
 	bo := newBackOffPolicy(ctx, cfg)
 

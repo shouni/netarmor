@@ -106,4 +106,12 @@ func TestDo(t *testing.T) {
 			t.Errorf("context.Canceled を期待していましたが、異なります: %v", err)
 		}
 	})
+
+	t.Run("失敗: nil Operation は即座にエラーになること", func(t *testing.T) {
+		err := Do(ctx, cfg, "TestOp", nil, nil)
+
+		if !errors.Is(err, ErrNilOperation) {
+			t.Errorf("ErrNilOperation を期待していましたが、異なります: %v", err)
+		}
+	})
 }

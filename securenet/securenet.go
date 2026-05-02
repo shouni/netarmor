@@ -15,6 +15,8 @@ const (
 	SchemeHTTPS = "https"
 	SchemeGCS   = "gs"
 	SchemeS3    = "s3"
+
+	defaultDNSLookupTimeout = 5 * time.Second
 )
 
 // localdevHostnames は、ローカル開発環境で一般的に使用されるホスト名のセットです。
@@ -25,6 +27,16 @@ var localdevHostnames = map[string]struct{}{
 	"host.docker.internal": {},
 }
 
+var restrictedIPNetworks = mustParseCIDRs(
+	"0.0.0.0/8",
+	"100.64.0.0/10",
+	"198.18.0.0/15",
+	"224.0.0.0/4",
+	"240.0.0.0/4",
+	"::/128",
+	"ff00::/8",
+)
+
 // IsSecureServiceURL は、提供されたサービス URL が安全なスキームを使用しているか、ローカル開発ホスト名と一致しているかを確認します。
 func IsSecureServiceURL(serviceURL string) bool {
 	u, err := url.Parse(serviceURL)
@@ -34,6 +46,9 @@ func IsSecureServiceURL(serviceURL string) bool {
 
 	scheme := strings.ToLower(u.Scheme)
 	hostname := strings.ToLower(u.Hostname())
+	if hostname == "" {
+		return false
+	}
 
 	switch scheme {
 	case SchemeHTTPS:
@@ -49,6 +64,13 @@ func IsSecureServiceURL(serviceURL string) bool {
 // スキームが許可されているか、ホスト名がプライベートIPに解決されないかを確認します。
 // 動的なDNS Rebinding攻撃への対策として、実際のリクエスト発行時にはこの関数と合わせて NewSafeHTTPClient の使用を強く推奨します。
 func IsSafeURL(rawURL string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultDNSLookupTimeout)
+	defer cancel()
+	return IsSafeURLContext(ctx, rawURL)
+}
+
+// IsSafeURLContext は、context 付きでURLの静的検証を行います。
+func IsSafeURLContext(ctx context.Context, rawURL string) (bool, error) {
 	parsedURL, err := url.ParseRequestURI(rawURL)
 	if err != nil {
 		return false, fmt.Errorf("URLパース失敗: %w", err)
@@ -70,7 +92,7 @@ func IsSafeURL(rawURL string) (bool, error) {
 		return false, fmt.Errorf("ホストが空です")
 	}
 
-	if err := validateHostnameIPs(hostname); err != nil {
+	if err := validateHostnameIPs(ctx, hostname); err != nil {
 		return false, err
 	}
 
@@ -86,16 +108,20 @@ func NewSafeHTTPClient(timeout time.Duration) *http.Client {
 
 	// http.DefaultTransport の設定をコピーしてカスタマイズする
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
 	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		host, _, err := net.SplitHostPort(addr)
+		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
-			host = addr
+			return nil, fmt.Errorf("接続先アドレスの解析に失敗: %w", err)
 		}
 
 		// 接続直前に名前解決を行い、解決されたIPを即座にチェックする (TOCTOU対策)
 		ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
 		if err != nil {
 			return nil, err
+		}
+		if len(ips) == 0 {
+			return nil, fmt.Errorf("ホスト '%s' の名前解決結果が空です", host)
 		}
 
 		for _, ip := range ips {
@@ -104,9 +130,16 @@ func NewSafeHTTPClient(timeout time.Duration) *http.Client {
 			}
 		}
 
-		return dialer.DialContext(ctx, network, addr)
+		var lastErr error
+		for _, ip := range ips {
+			conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			if err == nil {
+				return conn, nil
+			}
+			lastErr = err
+		}
+		return nil, lastErr
 	}
-	// ProxyFromEnvironmentはClone()で引き継がれるため、明示的な設定は不要な場合が多い
 
 	return &http.Client{
 		Transport: transport,
@@ -124,10 +157,13 @@ func isLocalDevHostname(hostname string) bool {
 }
 
 // validateHostnameIPs は、指定されたホスト名が制限された IP アドレスに解決されるかどうかを確認します。
-func validateHostnameIPs(hostname string) error {
-	ips, err := net.LookupIP(hostname)
+func validateHostnameIPs(ctx context.Context, hostname string) error {
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", hostname)
 	if err != nil {
 		return fmt.Errorf("ホスト '%s' の名前解決に失敗: %w", hostname, err)
+	}
+	if len(ips) == 0 {
+		return fmt.Errorf("ホスト '%s' の名前解決結果が空です", hostname)
 	}
 
 	for _, ip := range ips {
@@ -140,8 +176,32 @@ func validateHostnameIPs(hostname string) error {
 
 // isRestrictedIP は、指定されたIPアドレスがプライベート、ループバック、またはリンクローカルアドレスであるかを判定します。
 func isRestrictedIP(ip net.IP) bool {
-	return ip.IsPrivate() ||
+	if ip.IsPrivate() ||
 		ip.IsLoopback() ||
 		ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast()
+		ip.IsLinkLocalMulticast() ||
+		ip.IsUnspecified() ||
+		ip.IsMulticast() {
+		return true
+	}
+
+	for _, network := range restrictedIPNetworks {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func mustParseCIDRs(cidrs ...string) []*net.IPNet {
+	networks := make([]*net.IPNet, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			panic(fmt.Sprintf("invalid restricted IP network %q: %v", cidr, err))
+		}
+		networks = append(networks, network)
+	}
+	return networks
 }
