@@ -123,7 +123,7 @@ func TestNewSafeHTTPClient(t *testing.T) {
 
 	t.Run("BlockLoopbackConnection", func(t *testing.T) {
 		// httptest.NewServer は 127.0.0.1 で起動するため、NewSafeHTTPClient でブロックされることを確認する
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
 		defer server.Close()

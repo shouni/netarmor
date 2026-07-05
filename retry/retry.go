@@ -1,3 +1,5 @@
+// Package retry は、指数バックオフとカスタムエラー判定を用いて
+// 操作をリトライするためのユーティリティを提供します。
 package retry
 
 import (
@@ -10,11 +12,15 @@ import (
 )
 
 const (
-	DefaultMaxRetries      = 3
+	// DefaultMaxRetries は DefaultConfig が使用するデフォルトの最大リトライ回数です。
+	DefaultMaxRetries = 3
+	// InitialBackoffInterval は DefaultConfig が使用する初期バックオフ間隔です。
 	InitialBackoffInterval = 5 * time.Second
-	MaxBackoffInterval     = 30 * time.Second
+	// MaxBackoffInterval は DefaultConfig が使用する最大バックオフ間隔です。
+	MaxBackoffInterval = 30 * time.Second
 )
 
+// ErrNilOperation は、Do に nil の Operation が渡された場合に返されるエラーです。
 var ErrNilOperation = errors.New("retry operation is nil")
 
 // Operation はリトライ可能な処理を表す関数です。

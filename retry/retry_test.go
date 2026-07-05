@@ -28,7 +28,7 @@ func TestDo(t *testing.T) {
 			return nil
 		}
 
-		err := Do(ctx, cfg, "TestOp", op, func(err error) bool { return true })
+		err := Do(ctx, cfg, "TestOp", op, func(_ error) bool { return true })
 
 		if err != nil {
 			t.Errorf("期待しないエラーが発生しました: %v", err)
@@ -46,7 +46,7 @@ func TestDo(t *testing.T) {
 			return errExpected
 		}
 
-		err := Do(ctx, cfg, "TestOp", op, func(err error) bool { return true })
+		err := Do(ctx, cfg, "TestOp", op, func(_ error) bool { return true })
 
 		if err == nil {
 			t.Fatal("エラーが返ることを期待していましたが、nil です")
