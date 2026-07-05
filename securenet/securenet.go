@@ -1,3 +1,5 @@
+// Package securenet は、SSRF (Server-Side Request Forgery) 対策として、
+// URLのスキーム検証やDNS Rebinding対策済みのHTTPクライアント生成を行うユーティリティを提供します。
 package securenet
 
 import (
@@ -11,10 +13,14 @@ import (
 )
 
 const (
-	SchemeHTTP  = "http"
+	// SchemeHTTP は平文HTTPスキームを表します。ローカル開発ホスト名との組み合わせでのみ許可されます。
+	SchemeHTTP = "http"
+	// SchemeHTTPS は暗号化されたHTTPSスキームを表します。
 	SchemeHTTPS = "https"
-	SchemeGCS   = "gs"
-	SchemeS3    = "s3"
+	// SchemeGCS は Google Cloud Storage の URI スキームを表します。
+	SchemeGCS = "gs"
+	// SchemeS3 は Amazon S3 の URI スキームを表します。
+	SchemeS3 = "s3"
 
 	defaultDNSLookupTimeout = 5 * time.Second
 )
