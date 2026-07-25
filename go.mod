@@ -3,7 +3,7 @@ module github.com/shouni/netarmor
 go 1.26
 
 require (
-	github.com/cenkalti/backoff/v4 v4.3.0
+	github.com/cenkalti/backoff/v5 v5.0.3
 	github.com/stretchr/testify v1.11.1
 )
 

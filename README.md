@@ -6,7 +6,6 @@
 [![GitHub tag (latest by date)](https://img.shields.io/github/v/tag/shouni/netarmor)](https://github.com/shouni/netarmor/tags)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go Reference](https://pkg.go.dev/badge/github.com/shouni/netarmor.svg)](https://pkg.go.dev/github.com/shouni/netarmor)
-[![Status](https://img.shields.io/badge/Status-Completed-brightgreen)](#)
 
 ## 💡 概要 (About)— 鉄壁のネットワーク防御と回復力を提供する高信頼性ユーティリティ
 
@@ -16,8 +15,10 @@
 
 ## ✨ 特徴
 
-* **堅牢なリトライ (`retry`)**: `backoff/v4` をベースに、Context キャンセルや最大試行回数を直感的に扱えるインターフェースを提供。
-* **強力な防御 (`securenet`)**: HTTP クライアントの Transport 層で接続直前に IP アドレスを検証し、検証済み IP に接続します。DNS Rebinding 等の TOCTOU 攻撃を遮断します。
+* **堅牢なリトライ (`retry`)**: `backoff/v5` をベースに、Context キャンセル・最大試行回数・ジッタ・観測フックを直感的に扱えるインターフェースを提供。
+* **強力な防御 (`securenet`)**: HTTP クライアントの Transport 層で接続直前に IP アドレスを検証し、**検証済み IP に対して直接接続**します。DNS Rebinding 等の TOCTOU 攻撃を遮断します。
+* **型付きエラー**: すべての失敗理由を `errors.Is` / `errors.As` で分類できます。エラーメッセージの文字列比較は不要です。
+* **テスト容易性**: リゾルバを差し替えられるため、実 DNS に依存しないユニットテストが書けます。
 * **クラウド対応**: HTTP/HTTPS だけでなく、`gs://` (GCS) や `s3://` (S3) といったクラウドストレージ用スキームの検証にも対応。
 * **モジュール性**: 各パッケージは独立しており、必要な機能のみをインポートして利用可能です。
 
@@ -27,8 +28,8 @@
 
 | パッケージ | 説明 | 主な提供機能 |
 | --- | --- | --- |
-| **`securenet`** | **ネットワークセキュリティ**。SSRF 対策や、サービス URL の妥当性判定を行います。 | 安全な HTTP クライアント (`NewSafeHTTPClient`)、URL 検証 (`IsSafeURL`)、サービス URL 判定 |
-| **`retry`** | **耐障害性向上**。一時的なエラーが発生した際に、指数バックオフを用いて再試行します。 | バックオフ付きリトライ実行 (`Do`)、設定補完 (`withDefaults`) |
+| **`securenet`** | **ネットワークセキュリティ**。SSRF 対策や、サービス URL の妥当性判定を行います。 | `NewSafeHTTPClient` / `NewSafeTransport` / `ValidateURL` / `IsSecureServiceURL` |
+| **`retry`** | **耐障害性向上**。一時的なエラーが発生した際に、指数バックオフを用いて再試行します。 | `Run` / `RunValue` / `With*` オプション |
 
 ---
 
@@ -36,7 +37,7 @@
 
 ### 1. 安全な HTTP リクエスト (`securenet`)
 
-DNS Rebinding 攻撃を防ぐため、接続を確立する直前に名前解決を行い、解決された IP アドレスがプライベート範囲でないか検証します。
+DNS Rebinding 攻撃を防ぐため、接続を確立する直前に名前解決を行い、解決された IP アドレスがプライベート範囲でないか検証した上で、**その IP に直接接続**します。
 安全な HTTP クライアントは環境変数の `HTTP_PROXY` / `HTTPS_PROXY` を使用しません。
 
 ```go
@@ -53,51 +54,131 @@ resp, err := client.Get("https://api.example.com/data")
 
 // 安全ではないURL（例：内部ネットワークへの攻撃試行）は、DialContext層で遮断されます
 _, err = client.Get("http://169.254.169.254/latest/meta-data/")
-
+// errors.Is(err, securenet.ErrRestrictedIP) == true
 ```
 
-URL の静的検証に timeout やキャンセルを適用したい場合は、`IsSafeURLContext` を使用できます。
+独自の `*http.Client` を組み立てたい場合は Transport だけを取得できます。
 
 ```go
-import (
-    "context"
-    "time"
+client := &http.Client{
+    Transport: securenet.NewSafeTransport(10 * time.Second),
+    Jar:       jar,
+}
+```
 
-    "github.com/shouni/netarmor/securenet"
-)
+### 2. URL の静的検証
 
+ユーザー入力を受け付けた時点で早期に弾きたい場合は `ValidateURL` を使用します。
+
+```go
 ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 defer cancel()
 
-safe, err := securenet.IsSafeURLContext(ctx, "https://api.example.com/data")
-
+if err := securenet.ValidateURL(ctx, rawURL); err != nil {
+    switch {
+    case errors.Is(err, securenet.ErrRestrictedIP):
+        // 制限されたネットワークへのアクセス
+    case errors.Is(err, securenet.ErrDisallowedScheme):
+        // 許可されていないスキーム
+    case errors.Is(err, securenet.ErrInvalidURL):
+        // URL のパース失敗
+    }
+}
 ```
 
-### 2. 指数バックオフリトライ (`retry`)
+> ⚠️ **静的検証だけでは DNS Rebinding を防げません。** 検証後・接続前に DNS 応答が差し替えられる攻撃に対する本体の防御は `NewSafeHTTPClient` / `NewSafeTransport` の側にあります。必ず併用してください。
+
+### 3. ポリシーの調整
+
+既定のポリシーは Option で緩めたり厳しくしたりできます。
+
+```go
+// テストでローカルサーバに接続する
+client := securenet.NewSafeHTTPClient(2*time.Second, securenet.WithAllowLoopback())
+
+// 社内ネットワークの特定範囲だけを許可する
+client := securenet.NewSafeHTTPClient(10*time.Second,
+    securenet.WithAllowedCIDRs("10.1.0.0/16"))
+
+// 社内プロキシ経由にする（プロキシ自身のアドレスの許可も必要）
+client := securenet.NewSafeHTTPClient(10*time.Second,
+    securenet.WithProxyFromEnvironment(),
+    securenet.WithAllowedCIDRs("10.0.0.0/8"))
+
+// リゾルバを差し替えて実 DNS に依存しないテストを書く
+client := securenet.NewSafeHTTPClient(2*time.Second,
+    securenet.WithResolver(myFakeResolver))
+```
+
+| Option | 用途 |
+| --- | --- |
+| `WithResolver` | 名前解決の差し替え（テスト用） |
+| `WithProxy` / `WithProxyFromEnvironment` | プロキシの明示的な有効化 |
+| `WithAllowedCIDRs` / `WithAllowedPrefixes` | 特定ネットワークの許可（最優先） |
+| `WithBlockedCIDRs` | 追加のブロック範囲 |
+| `WithAllowLoopback` / `WithAllowPrivate` / `WithAllowLinkLocal` | ポリシーの緩和 |
+| `WithBaseTransport` / `WithDialer` | Transport / Dialer の持ち込み |
+| `WithMaxRedirects` / `WithAllowRedirectDowngrade` | リダイレクトポリシー |
+
+### 4. 指数バックオフリトライ (`retry`)
 
 一時的な接続エラーに対し、適切な待機時間を挟みながら自動的にリトライを行います。
 
 ```go
 import (
     "context"
+    "log/slog"
+    "time"
+
     "github.com/shouni/netarmor/retry"
 )
 
-err := retry.Do(
-    context.Background(),
-    retry.DefaultConfig(),
-    "ExternalAPI",
-    func() error {
-        // リトライしたい処理（APIコールなど）
-        return callRemoteResource()
-    },
-    func(err error) bool {
-        // リトライすべきエラーかどうかを判定（例：5xxエラーなど）
-        return isTransient(err)
-    },
+err := retry.Run(ctx, func() error {
+    return callRemoteResource()
+},
+    retry.WithName("ExternalAPI"),
+    retry.WithMaxRetries(5),
+    retry.WithShouldRetry(isTransient),
+    retry.WithNotify(func(err error, attempt uint, next time.Duration) {
+        slog.Warn("retrying", "attempt", attempt, "next", next, "err", err)
+    }),
 )
-
 ```
+
+戻り値を伴う処理には `RunValue` を使用します（ジェネリクス対応）。
+
+```go
+body, err := retry.RunValue(ctx, func() ([]byte, error) {
+    return fetch(ctx, url)
+}, retry.WithMaxRetries(3))
+```
+
+失敗理由は型で判別できます。
+
+```go
+switch {
+case errors.Is(err, retry.ErrExhausted):     // 最大試行回数に到達
+case errors.Is(err, retry.ErrPermanent):     // リトライ不能と判定
+case errors.Is(err, context.DeadlineExceeded): // タイムアウト
+}
+
+if re, ok := errors.AsType[*retry.Error](err); ok {
+    slog.Error("failed", "op", re.Op, "attempts", re.Attempts, "cause", re.Err)
+}
+```
+
+| Option | 既定値 | 用途 |
+| --- | --- | --- |
+| `WithMaxRetries` | 3 | リトライ回数（**0 でリトライなし**） |
+| `WithMaxAttempts` | 4 | 初回を含む総試行回数 |
+| `WithInitialInterval` | 5s | 初回待機時間 |
+| `WithMaxInterval` | 30s | 待機時間の上限 |
+| `WithMultiplier` | 1.5 | 増加倍率 |
+| `WithRandomizationFactor` | 0.5 | ジッタ（0 で無効） |
+| `WithMaxElapsedTime` | 無効 | 経過時間による打ち切り |
+| `WithShouldRetry` | 全てリトライ | リトライ可否の判定 |
+| `WithNotify` | なし | リトライ直前のフック |
+| `WithName` | なし | エラーメッセージ用の操作名 |
 
 ---
 
@@ -105,15 +186,75 @@ err := retry.Do(
 
 `securenet` パッケージは、デフォルトで以下のアクセスを「制限されたネットワーク」として検知し、ブロックします。
 
-* プライベート IP アドレス範囲 (RFC 1918)
+* プライベート IP アドレス範囲 (RFC 1918、IPv6 ULA を含む)
 * ループバックアドレス (localhost, 127.0.0.1, ::1)
 * リンクローカルアドレス (169.254.0.0/16 等)
 * 未指定アドレス (0.0.0.0, ::)
 * Carrier-grade NAT 範囲 (100.64.0.0/10)
 * ベンチマーク用ネットワーク (198.18.0.0/15)
+* ドキュメント用 / TEST-NET 範囲 (192.0.2.0/24、198.51.100.0/24、203.0.113.0/24、2001:db8::/32)
 * マルチキャスト、予約済みアドレス範囲
 
-`IsSecureServiceURL` は HTTPS URL またはローカル開発用 HTTP URL を許可しますが、ホスト名が空の URL は拒否します。
+`::ffff:127.0.0.1` のような IPv4-mapped IPv6 表記は正規化した上で判定するため、表記による回避はできません。
+
+ホスト名が複数の IP に解決される場合、**1 つでも制限対象があれば全体を拒否します** (fail-closed)。
+
+`IsSecureServiceURL` は HTTPS URL またはローカル開発用 HTTP URL を許可しますが、ホスト名が空の URL は拒否します。これは設定値の妥当性チェックであり、名前解決を行いません。
+
+脅威モデルの詳細と脆弱性の報告方法は [SECURITY.md](SECURITY.md) を参照してください。
+
+---
+
+## 🔄 v1.1.0 からの移行 (Migration)
+
+v1.2.0 で非推奨 API を削除しました。以下の対応が必要です。
+
+### `retry`
+
+```go
+// Before (v1.1.0)
+cfg := retry.DefaultConfig()
+cfg.MaxRetries = 5
+err := retry.Do(ctx, cfg, "ExternalAPI", op, shouldRetry)
+
+// After (v1.2.0)
+err := retry.Run(ctx, op,
+    retry.WithName("ExternalAPI"),
+    retry.WithMaxRetries(5),
+    retry.WithShouldRetry(shouldRetry),
+)
+```
+
+| 削除された API | 移行先 |
+| --- | --- |
+| `retry.Do` | `retry.Run` |
+| `retry.Config` | `retry.With*` オプション |
+| `retry.DefaultConfig` | 既定値は `Run` に内蔵（指定不要） |
+
+> **注意**: `Config.MaxRetries` は 0 を「未設定」として既定値 3 に補完していましたが、`WithMaxRetries(0)` は「リトライしない」を意味します。0 を渡していた箇所は意図を確認してください。
+
+### `securenet`
+
+```go
+// Before (v1.1.0)
+if ok, err := securenet.IsSafeURL(rawURL); !ok {
+    return err
+}
+
+// After (v1.2.0)
+ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+defer cancel()
+if err := securenet.ValidateURL(ctx, rawURL); err != nil {
+    return err
+}
+```
+
+| 削除された API | 移行先 |
+| --- | --- |
+| `securenet.IsSafeURL` | `securenet.ValidateURL`（タイムアウトは ctx で指定） |
+| `securenet.IsSafeURLContext` | `securenet.ValidateURL` |
+
+エラーメッセージは日本語から英語＋型付きエラーに変更されました。文字列比較を行っていた箇所は `errors.Is` / `errors.As` に置き換えてください。
 
 ---
 
