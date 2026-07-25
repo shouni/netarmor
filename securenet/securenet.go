@@ -1,5 +1,30 @@
 // Package securenet は、SSRF (Server-Side Request Forgery) 対策として、
 // URLのスキーム検証やDNS Rebinding対策済みのHTTPクライアント生成を行うユーティリティを提供します。
+//
+// # 二段構えの防御
+//
+// 本パッケージは目的の異なる 2 つの検証層を提供します。両方を併用してください。
+//
+//  1. 静的検証 (ValidateURL): リクエストを発行する前に URL を弾くための事前チェックです。
+//     ユーザー入力を受け付けた時点で早期にエラーを返す用途に向いています。
+//  2. 接続時検証 (NewSafeHTTPClient / NewSafeTransport): DNS Rebinding のような
+//     TOCTOU 攻撃に対する本体の防御です。接続を確立する直前に名前解決を行い、
+//     検証済みの IP アドレスに対して直接ダイヤルします。
+//
+// 静的検証だけでは、検証後・接続前に DNS 応答が差し替えられる攻撃を防げません。
+// 権威ある防御は常に接続時検証の側にあります。
+//
+// # fail-closed 方針
+//
+// ホスト名が複数の IP アドレスに解決される場合、そのうち 1 つでも制限対象で
+// あれば接続全体を拒否します。「安全な IP だけを選んで接続する」方式は、
+// 攻撃者が解決順序を操作できる状況で回避されうるため採用していません。
+//
+// # プロキシ
+//
+// 生成されるクライアントは既定で HTTP_PROXY / HTTPS_PROXY を使用しません。
+// 環境変数経由で IP 検証を迂回されることを防ぐためです。
+// 明示的に有効化するには WithProxy または WithProxyFromEnvironment を使用してください。
 package securenet
 
 import (
@@ -7,6 +32,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -21,8 +47,6 @@ const (
 	SchemeGCS = "gs"
 	// SchemeS3 は Amazon S3 の URI スキームを表します。
 	SchemeS3 = "s3"
-
-	defaultDNSLookupTimeout = 5 * time.Second
 )
 
 // localdevHostnames は、ローカル開発環境で一般的に使用されるホスト名のセットです。
@@ -33,30 +57,24 @@ var localdevHostnames = map[string]struct{}{
 	"host.docker.internal": {},
 }
 
-var restrictedIPNetworks = mustParseCIDRs(
-	"0.0.0.0/8",
-	"100.64.0.0/10",
-	"198.18.0.0/15",
-	"224.0.0.0/4",
-	"240.0.0.0/4",
-	"::/128",
-	"ff00::/8",
-)
-
-// IsSecureServiceURL は、提供されたサービス URL が安全なスキームを使用しているか、ローカル開発ホスト名と一致しているかを確認します。
+// IsSecureServiceURL は、提供されたサービス URL が安全なスキームを使用しているか、
+// ローカル開発ホスト名と一致しているかを確認します。
+//
+// これは設定値の妥当性を判定するための軽量なチェックであり、名前解決を行いません。
+// 「その URL を実際に取得して安全か」を判定するものではないため、
+// 外部から与えられた URL を検証する用途には ValidateURL を使用してください。
 func IsSecureServiceURL(serviceURL string) bool {
-	u, err := url.Parse(serviceURL)
+	u, err := url.ParseRequestURI(serviceURL)
 	if err != nil {
 		return false
 	}
 
-	scheme := strings.ToLower(u.Scheme)
 	hostname := strings.ToLower(u.Hostname())
 	if hostname == "" {
 		return false
 	}
 
-	switch scheme {
+	switch strings.ToLower(u.Scheme) {
 	case SchemeHTTPS:
 		return true
 	case SchemeHTTP:
@@ -66,91 +84,161 @@ func IsSecureServiceURL(serviceURL string) bool {
 	}
 }
 
-// IsSafeURL は、SSRF (Server-Side Request Forgery) 攻撃を防ぐため、URLの静的検証を行います。
-// スキームが許可されているか、ホスト名がプライベートIPに解決されないかを確認します。
-// 動的なDNS Rebinding攻撃への対策として、実際のリクエスト発行時にはこの関数と合わせて NewSafeHTTPClient の使用を強く推奨します。
-func IsSafeURL(rawURL string) (bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultDNSLookupTimeout)
-	defer cancel()
-	return IsSafeURLContext(ctx, rawURL)
+// ValidateURL は、SSRF 攻撃を防ぐために URL の静的検証を行います。
+// 安全と判断された場合は nil を、そうでない場合は失敗理由を表すエラーを返します。
+//
+// 返されるエラーは errors.Is / errors.As で分類できます。
+//
+//	err := securenet.ValidateURL(ctx, rawURL)
+//	switch {
+//	case errors.Is(err, securenet.ErrRestrictedIP):
+//		// 制限されたネットワークへのアクセス
+//	case errors.Is(err, securenet.ErrDisallowedScheme):
+//		// 許可されていないスキーム
+//	}
+//
+// gs:// および s3:// スキームは、クラウド SDK が独自に接続先を決定するため
+// 名前解決を行わずに許可されます。
+//
+// 名前解決のタイムアウトは ctx で制御してください。本関数は独自のタイムアウトを設定しません。
+func ValidateURL(ctx context.Context, rawURL string, opts ...Option) error {
+	return newOptions(opts).validateURL(ctx, rawURL)
 }
 
-// IsSafeURLContext は、context 付きでURLの静的検証を行います。
-func IsSafeURLContext(ctx context.Context, rawURL string) (bool, error) {
-	parsedURL, err := url.ParseRequestURI(rawURL)
-	if err != nil {
-		return false, fmt.Errorf("URLパース失敗: %w", err)
-	}
-
-	scheme := strings.ToLower(parsedURL.Scheme)
-
-	switch scheme {
-	case SchemeGCS, SchemeS3:
-		return true, nil
-	case SchemeHTTP, SchemeHTTPS:
-		// 検証を続行
-	default:
-		return false, fmt.Errorf("不許可スキーム: %s", parsedURL.Scheme)
-	}
-
-	hostname := strings.ToLower(parsedURL.Hostname())
-	if hostname == "" {
-		return false, fmt.Errorf("ホストが空です")
-	}
-
-	if err := validateHostnameIPs(ctx, hostname); err != nil {
-		return false, err
-	}
-
-	return true, nil
+// NewSafeTransport は、接続直前に IP 検証を行う *http.Transport を生成します。
+//
+// 独自の *http.Client（cookiejar や計装付き）を構築したい場合に使用してください。
+// 単に安全なクライアントが欲しい場合は NewSafeHTTPClient を使用します。
+func NewSafeTransport(timeout time.Duration, opts ...Option) *http.Transport {
+	return newOptions(opts).newTransport(timeout)
 }
 
 // NewSafeHTTPClient は、接続直前にIP検証を行うことでDNS Rebindingを防ぐクライアントを生成します。
-func NewSafeHTTPClient(timeout time.Duration) *http.Client {
-	dialer := &net.Dialer{
-		Timeout:   timeout,
-		KeepAlive: 30 * time.Second,
+//
+// 既定では以下のポリシーが適用されます。
+//   - プライベート / ループバック / リンクローカル等への接続を拒否
+//   - 環境変数によるプロキシを無効化
+//   - リダイレクト追従は最大 10 回、https から http へのダウングレードは拒否
+//
+// これらは Option で調整できます。
+func NewSafeHTTPClient(timeout time.Duration, opts ...Option) *http.Client {
+	o := newOptions(opts)
+	return &http.Client{
+		Transport:     o.newTransport(timeout),
+		Timeout:       timeout,
+		CheckRedirect: o.checkRedirect,
+	}
+}
+
+// newTransport は options から検証付き Transport を生成します。
+func (o *options) newTransport(timeout time.Duration) *http.Transport {
+	base := o.baseTransport
+	if base == nil {
+		base = http.DefaultTransport.(*http.Transport)
 	}
 
-	// http.DefaultTransport の設定をコピーしてカスタマイズする
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+	transport := base.Clone()
+	transport.Proxy = o.proxy
+	transport.DialContext = o.dialContext(o.newDialer(timeout))
+	return transport
+}
+
+// dialContext は、接続直前に名前解決と IP 検証を行うダイヤル関数を返します。
+func (o *options) dialContext(dialer *net.Dialer) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
-			return nil, fmt.Errorf("接続先アドレスの解析に失敗: %w", err)
+			return nil, fmt.Errorf("securenet: split host port %q: %w", addr, err)
 		}
 
 		// 接続直前に名前解決を行い、解決されたIPを即座にチェックする (TOCTOU対策)
-		ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+		addrs, err := o.resolveAndCheck(ctx, host)
 		if err != nil {
 			return nil, err
 		}
-		if len(ips) == 0 {
-			return nil, fmt.Errorf("ホスト '%s' の名前解決結果が空です", host)
-		}
 
-		for _, ip := range ips {
-			if isRestrictedIP(ip) {
-				return nil, fmt.Errorf("restricted IP detected: %s", ip.String())
-			}
-		}
-
+		// 検証済みの IP に対して直接ダイヤルする。ホスト名で再ダイヤルすると
+		// ここで再度名前解決が走り、検証を回避されうる。
 		var lastErr error
-		for _, ip := range ips {
-			conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		for _, a := range addrs {
+			conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(a.String(), port))
 			if err == nil {
 				return conn, nil
 			}
 			lastErr = err
+			if ctx.Err() != nil {
+				break
+			}
 		}
 		return nil, lastErr
 	}
+}
 
-	return &http.Client{
-		Transport: transport,
-		Timeout:   timeout,
+// checkRedirect はリダイレクト追従の可否を判定します。
+func (o *options) checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) > o.maxRedirects {
+		return fmt.Errorf("securenet: stopped after %d redirects", o.maxRedirects)
 	}
+	if !o.allowDowngrade && len(via) > 0 {
+		prev := via[len(via)-1]
+		if prev.URL.Scheme == SchemeHTTPS && req.URL.Scheme == SchemeHTTP {
+			return fmt.Errorf("securenet: refusing redirect downgrade from https to http (%s)", req.URL.Redacted())
+		}
+	}
+	return nil
+}
+
+// validateURL は URL のスキームとホスト名を検証します。
+func (o *options) validateURL(ctx context.Context, rawURL string) error {
+	parsed, err := url.ParseRequestURI(rawURL)
+	if err != nil {
+		return &URLError{URL: rawURL, Err: err}
+	}
+
+	switch strings.ToLower(parsed.Scheme) {
+	case SchemeGCS, SchemeS3:
+		// クラウドストレージ SDK が接続先を決定するため、ここでは検証しない。
+		return nil
+	case SchemeHTTP, SchemeHTTPS:
+		// 検証を続行
+	default:
+		return &SchemeError{Scheme: strings.ToLower(parsed.Scheme)}
+	}
+
+	hostname := strings.ToLower(parsed.Hostname())
+	if hostname == "" {
+		return fmt.Errorf("%w: %q", ErrEmptyHost, rawURL)
+	}
+
+	_, err = o.resolveAndCheck(ctx, hostname)
+	return err
+}
+
+// resolveAndCheck はホスト名を解決し、すべての結果がポリシー上許可されることを確認します。
+// 1 つでも制限対象が含まれる場合は fail-closed でエラーを返します。
+func (o *options) resolveAndCheck(ctx context.Context, host string) ([]netip.Addr, error) {
+	// IP リテラルはリゾルバを介さずに直接検証する。
+	if a, err := netip.ParseAddr(host); err == nil {
+		if o.policy.isRestricted(a) {
+			return nil, &BlockedIPError{Host: host, Addr: a}
+		}
+		return []netip.Addr{a}, nil
+	}
+
+	addrs, err := o.resolver.LookupNetIP(ctx, "ip", host)
+	if err != nil {
+		return nil, &ResolveError{Host: host, Err: err}
+	}
+	if len(addrs) == 0 {
+		return nil, fmt.Errorf("%w: %q", ErrNoAddresses, host)
+	}
+
+	for _, a := range addrs {
+		if o.policy.isRestricted(a) {
+			return nil, &BlockedIPError{Host: host, Addr: a}
+		}
+	}
+	return addrs, nil
 }
 
 // isLocalDevHostname は、指定されたホスト名が既知のローカル開発ホスト名と一致するかどうかを確認します。
@@ -160,54 +248,4 @@ func isLocalDevHostname(hostname string) bool {
 	}
 	_, ok := localdevHostnames[hostname]
 	return ok
-}
-
-// validateHostnameIPs は、指定されたホスト名が制限された IP アドレスに解決されるかどうかを確認します。
-func validateHostnameIPs(ctx context.Context, hostname string) error {
-	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", hostname)
-	if err != nil {
-		return fmt.Errorf("ホスト '%s' の名前解決に失敗: %w", hostname, err)
-	}
-	if len(ips) == 0 {
-		return fmt.Errorf("ホスト '%s' の名前解決結果が空です", hostname)
-	}
-
-	for _, ip := range ips {
-		if isRestrictedIP(ip) {
-			return fmt.Errorf("制限されたネットワークへのアクセスを検知: %s", ip.String())
-		}
-	}
-	return nil
-}
-
-// isRestrictedIP は、指定されたIPアドレスがプライベート、ループバック、またはリンクローカルアドレスであるかを判定します。
-func isRestrictedIP(ip net.IP) bool {
-	if ip.IsPrivate() ||
-		ip.IsLoopback() ||
-		ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() ||
-		ip.IsUnspecified() ||
-		ip.IsMulticast() {
-		return true
-	}
-
-	for _, network := range restrictedIPNetworks {
-		if network.Contains(ip) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func mustParseCIDRs(cidrs ...string) []*net.IPNet {
-	networks := make([]*net.IPNet, 0, len(cidrs))
-	for _, cidr := range cidrs {
-		_, network, err := net.ParseCIDR(cidr)
-		if err != nil {
-			panic(fmt.Sprintf("invalid restricted IP network %q: %v", cidr, err))
-		}
-		networks = append(networks, network)
-	}
-	return networks
 }
