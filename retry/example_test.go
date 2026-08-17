@@ -81,6 +81,25 @@ func ExampleWithShouldRetry() {
 	// permanent: true
 }
 
+// throttledError は DelayHinter を実装し、サーバ指定の待機時間を伝えるエラーです。
+type throttledError struct{}
+
+func (*throttledError) Error() string             { return "throttled" }
+func (*throttledError) RetryAfter() time.Duration { return 5 * time.Millisecond }
+
+// エラーが RetryAfter を実装していると、指数バックオフの算出値の代わりに
+// その値が次の待機時間として使われます（HTTP の Retry-After ヘッダー対応など）。
+func ExampleDelayHinter() {
+	_ = retry.Run(context.Background(), func() error { return &throttledError{} },
+		retry.WithMaxRetries(1),
+		retry.WithInitialInterval(time.Millisecond),
+		retry.WithNotify(func(err error, attempt uint, next time.Duration) {
+			fmt.Printf("attempt %d failed: %v (retrying in %v)\n", attempt, err, next)
+		}),
+	)
+	// Output: attempt 1 failed: throttled (retrying in 5ms)
+}
+
 func ExampleWithNotify() {
 	_ = retry.Run(context.Background(), func() error { return errors.New("boom") },
 		retry.WithMaxRetries(2),

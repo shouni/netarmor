@@ -15,7 +15,7 @@
 
 ## ✨ 特徴
 
-* **堅牢なリトライ (`retry`)**: `backoff/v5` をベースに、Context キャンセル・最大試行回数・ジッタ・観測フックを直感的に扱えるインターフェースを提供。
+* **堅牢なリトライ (`retry`)**: `backoff/v5` をベースに、Context キャンセル・最大試行回数・ジッタ・観測フック・サーバ指定の待機時間 (Retry-After) を直感的に扱えるインターフェースを提供。
 * **強力な防御 (`securenet`)**: HTTP クライアントの Transport 層で接続直前に IP アドレスを検証し、**検証済み IP に対して直接接続**します。DNS Rebinding 等の TOCTOU 攻撃を遮断します。
 * **型付きエラー**: すべての失敗理由を `errors.Is` / `errors.As` で分類できます。エラーメッセージの文字列比較は不要です。
 * **テスト容易性**: リゾルバを差し替えられるため、実 DNS に依存しないユニットテストが書けます。
@@ -29,7 +29,7 @@
 | パッケージ | 説明 | 主な提供機能 |
 | --- | --- | --- |
 | **`securenet`** | **ネットワークセキュリティ**。SSRF 対策や、サービス URL の妥当性判定を行います。 | `NewSafeHTTPClient` / `NewSafeTransport` / `ValidateURL` / `IsSecureServiceURL` |
-| **`retry`** | **耐障害性向上**。一時的なエラーが発生した際に、指数バックオフを用いて再試行します。 | `Run` / `RunValue` / `With*` オプション |
+| **`retry`** | **耐障害性向上**。一時的なエラーが発生した際に、指数バックオフを用いて再試行します。 | `Run` / `RunValue` / `With*` オプション / `DelayHinter` |
 
 ---
 
@@ -37,7 +37,7 @@
 
 ### 1. 安全な HTTP リクエスト (`securenet`)
 
-DNS Rebinding 攻撃を防ぐため、接続を確立する直前に名前解決を行い、解決された IP アドレスがプライベート範囲でないか検証した上で、**その IP に直接接続**します。
+DNS Rebinding 攻撃を防ぐため、接続を確立する直前に名前解決を行い、解決された IP アドレスが制限対象の範囲（プライベート / ループバック / リンクローカル等）でないか検証した上で、**その IP に直接接続**します。
 安全な HTTP クライアントは環境変数の `HTTP_PROXY` / `HTTPS_PROXY` を使用しません。
 
 ```go
@@ -153,6 +153,15 @@ body, err := retry.RunValue(ctx, func() ([]byte, error) {
 }, retry.WithMaxRetries(3))
 ```
 
+サーバが待機時間を指定してくる場合（HTTP 429/503 の `Retry-After` など）は、エラー型に `RetryAfter() time.Duration` を実装してください（`retry.DelayHinter`）。正の値を返すと、次の待機時間は指数バックオフの算出値の代わりにその値になり、以降のバックオフ計算はリセットされます。
+
+```go
+type rateLimitError struct{ retryAfter time.Duration }
+
+func (e *rateLimitError) Error() string             { return "rate limited" }
+func (e *rateLimitError) RetryAfter() time.Duration { return e.retryAfter }
+```
+
 失敗理由は型で判別できます。
 
 ```go
@@ -192,10 +201,12 @@ if re, ok := errors.AsType[*retry.Error](err); ok {
 * 未指定アドレス (0.0.0.0, ::)
 * Carrier-grade NAT 範囲 (100.64.0.0/10)
 * ベンチマーク用ネットワーク (198.18.0.0/15)
-* ドキュメント用 / TEST-NET 範囲 (192.0.2.0/24、198.51.100.0/24、203.0.113.0/24、2001:db8::/32)
+* ドキュメント用 / TEST-NET 範囲 (192.0.2.0/24、198.51.100.0/24、203.0.113.0/24、2001:db8::/32、3fff::/20)
+* IPv4 を埋め込める変換範囲 — NAT64 (64:ff9b::/96、64:ff9b:1::/48)、6to4 (2002::/16、192.88.99.0/24)、Teredo (2001::/32)
+* 廃止されたサイトローカル (fec0::/10)、SRv6 SID (5f00::/16)
 * マルチキャスト、予約済みアドレス範囲
 
-`::ffff:127.0.0.1` のような IPv4-mapped IPv6 表記は正規化した上で判定するため、表記による回避はできません。
+`::ffff:127.0.0.1` のような IPv4-mapped IPv6 表記は正規化した上で判定するため、表記による回避はできません。NAT64 などの変換範囲は、アドレス内に埋め込んだ内部 IPv4（例: `64:ff9b::a9fe:a9fe` はメタデータエンドポイント）への到達経路になりうるため範囲全体をブロックします。NAT64 環境で正当に必要な場合は `WithAllowedCIDRs` で明示的に許可してください。
 
 ホスト名が複数の IP に解決される場合、**1 つでも制限対象があれば全体を拒否します** (fail-closed)。
 

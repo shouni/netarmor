@@ -39,7 +39,9 @@ import (
 )
 
 const (
-	// SchemeHTTP は平文HTTPスキームを表します。ローカル開発ホスト名との組み合わせでのみ許可されます。
+	// SchemeHTTP は平文HTTPスキームを表します。
+	// IsSecureServiceURL ではローカル開発ホスト名との組み合わせでのみ許可されます
+	// （ValidateURL と接続時検証では制限対象でないホストへの http は許可されます）。
 	SchemeHTTP = "http"
 	// SchemeHTTPS は暗号化されたHTTPSスキームを表します。
 	SchemeHTTPS = "https"

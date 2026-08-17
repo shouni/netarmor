@@ -3,6 +3,7 @@ package retry_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -268,6 +269,117 @@ func TestRun(t *testing.T) {
 		var nilCtx context.Context
 		if err := retry.Run(nilCtx, func() error { return nil }); err != nil {
 			t.Errorf("期待しないエラーが発生しました: %v", err)
+		}
+	})
+}
+
+// rateLimitedError は DelayHinter を実装するテスト用エラーです。
+type rateLimitedError struct{ after time.Duration }
+
+func (e *rateLimitedError) Error() string             { return "rate limited" }
+func (e *rateLimitedError) RetryAfter() time.Duration { return e.after }
+
+func TestRetryAfterHint(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("ヒントが次の待機時間として使われること", func(t *testing.T) {
+		hinted := &rateLimitedError{after: 80 * time.Millisecond}
+		var waits []time.Duration
+
+		_ = retry.Run(ctx, func() error { return hinted },
+			retry.WithMaxRetries(1),
+			retry.WithInitialInterval(time.Millisecond),
+			retry.WithRandomizationFactor(0),
+			retry.WithNotify(func(_ error, _ uint, next time.Duration) {
+				waits = append(waits, next)
+			}),
+		)
+
+		if len(waits) != 1 {
+			t.Fatalf("通知回数が不正です: 期待 1, 実績 %d", len(waits))
+		}
+		if waits[0] != 80*time.Millisecond {
+			t.Errorf("ヒントが待機時間に反映されていません: %v", waits[0])
+		}
+	})
+
+	t.Run("ラップされたヒントも errors.As で検出されること", func(t *testing.T) {
+		hinted := &rateLimitedError{after: 60 * time.Millisecond}
+		var waits []time.Duration
+
+		_ = retry.Run(ctx, func() error { return fmt.Errorf("request failed: %w", hinted) },
+			retry.WithMaxRetries(1),
+			retry.WithInitialInterval(time.Millisecond),
+			retry.WithRandomizationFactor(0),
+			retry.WithNotify(func(_ error, _ uint, next time.Duration) {
+				waits = append(waits, next)
+			}),
+		)
+
+		if len(waits) != 1 || waits[0] != 60*time.Millisecond {
+			t.Errorf("ラップされたヒントが反映されていません: %v", waits)
+		}
+	})
+
+	t.Run("0以下のヒントは無視され通常のバックオフになること", func(t *testing.T) {
+		hinted := &rateLimitedError{after: 0}
+		var waits []time.Duration
+
+		_ = retry.Run(ctx, func() error { return hinted },
+			retry.WithMaxRetries(1),
+			retry.WithInitialInterval(10*time.Millisecond),
+			retry.WithRandomizationFactor(0),
+			retry.WithNotify(func(_ error, _ uint, next time.Duration) {
+				waits = append(waits, next)
+			}),
+		)
+
+		if len(waits) != 1 || waits[0] != 10*time.Millisecond {
+			t.Errorf("0のヒントは無視されるべきです: %v", waits)
+		}
+	})
+
+	t.Run("フックと最終エラーには元のエラーが渡ること", func(t *testing.T) {
+		hinted := &rateLimitedError{after: time.Millisecond}
+		var notified []error
+
+		err := retry.Run(ctx, func() error { return hinted },
+			retry.WithMaxRetries(1),
+			retry.WithInitialInterval(time.Millisecond),
+			retry.WithRandomizationFactor(0),
+			retry.WithNotify(func(err error, _ uint, _ time.Duration) {
+				notified = append(notified, err)
+			}),
+		)
+
+		if len(notified) != 1 || !errors.Is(notified[0], hinted) {
+			t.Errorf("フックに元のエラーが渡っていません: %v", notified)
+		}
+		re, ok := errors.AsType[*retry.Error](err)
+		if !ok {
+			t.Fatalf("*retry.Error を期待していましたが、異なります: %v", err)
+		}
+		if re.Err != hinted { //nolint:errorlint // 連結表現でなく元のエラーそのものであることの検証
+			t.Errorf("Error.Err が元のエラーではありません: %v", re.Err)
+		}
+	})
+
+	t.Run("ShouldRetryFunc の打ち切りがヒントより優先されること", func(t *testing.T) {
+		calls := 0
+		err := retry.Run(ctx, func() error {
+			calls++
+			return &rateLimitedError{after: time.Millisecond}
+		},
+			retry.WithMaxRetries(3),
+			retry.WithInitialInterval(time.Millisecond),
+			retry.WithShouldRetry(func(error) bool { return false }),
+		)
+
+		if calls != 1 {
+			t.Errorf("即座に中断されるべきですが、%d 回実行されました", calls)
+		}
+		if !errors.Is(err, retry.ErrPermanent) {
+			t.Errorf("ErrPermanent を期待していましたが、異なります: %v", err)
 		}
 	})
 }

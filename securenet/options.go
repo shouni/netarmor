@@ -24,27 +24,45 @@ type Resolver interface {
 //   - 100.64.0.0/10     : Carrier-grade NAT (RFC 6598)
 //   - 192.0.0.0/24      : IETF プロトコル割り当て (RFC 6890)
 //   - 192.0.2.0/24      : TEST-NET-1 (RFC 5737)
+//   - 192.88.99.0/24    : 6to4 リレーエニーキャスト (廃止, RFC 7526)
 //   - 198.18.0.0/15     : ベンチマーク用 (RFC 2544)
 //   - 198.51.100.0/24   : TEST-NET-2 (RFC 5737)
 //   - 203.0.113.0/24    : TEST-NET-3 (RFC 5737)
 //   - 240.0.0.0/4       : 予約済み (RFC 1112)
-//   - 64:ff9b:1::/48    : IPv4/IPv6 変換 (RFC 8215)
+//   - 64:ff9b::/96      : NAT64 well-known prefix (RFC 6052)
+//   - 64:ff9b:1::/48    : IPv4/IPv6 変換・ローカル用 (RFC 8215)
 //   - 100::/64          : Discard-Only (RFC 6666)
+//   - 2001::/32         : Teredo (RFC 4380)
 //   - 2001:db8::/32     : ドキュメント用 (RFC 3849)
 //   - 2002::/16         : 6to4 (RFC 3056)
+//   - 3fff::/20         : ドキュメント用・拡張 (RFC 9637)
+//   - 5f00::/16         : SRv6 SID (RFC 9602)
+//   - fec0::/10         : サイトローカル (廃止, RFC 3879)
+//
+// NAT64 / 6to4 / Teredo の変換範囲は、アドレス内に IPv4 を埋め込めるため、
+// 埋め込んだ内部 IPv4（例: 64:ff9b::a9fe:a9fe はメタデータエンドポイント）への
+// 到達経路になりえます。埋め込み先を個別に検査する代わりに範囲全体を fail-closed で
+// ブロックします。NAT64 環境で正当に必要な場合は WithAllowedCIDRs で明示的に
+// 許可してください（その場合、埋め込み IPv4 の検査は行われない点に注意）。
 var defaultBlockedPrefixes = mustParsePrefixes(
 	"0.0.0.0/8",
 	"100.64.0.0/10",
 	"192.0.0.0/24",
 	"192.0.2.0/24",
+	"192.88.99.0/24",
 	"198.18.0.0/15",
 	"198.51.100.0/24",
 	"203.0.113.0/24",
 	"240.0.0.0/4",
+	"64:ff9b::/96",
 	"64:ff9b:1::/48",
 	"100::/64",
+	"2001::/32",
 	"2001:db8::/32",
 	"2002::/16",
+	"3fff::/20",
+	"5f00::/16",
+	"fec0::/10",
 )
 
 // policy は、ある IP アドレスへの接続を許可するかどうかを決定します。
@@ -230,6 +248,8 @@ func WithBaseTransport(t *http.Transport) Option {
 
 // WithDialer は接続に使用する *net.Dialer を差し替えます。
 // Dialer の Control フックなどを利用したい場合に使用します。
+// 指定した場合、コンストラクタに渡した timeout は Dialer には適用されないため、
+// 必要なら Dialer 側の Timeout を自分で設定してください。
 func WithDialer(d *net.Dialer) Option {
 	return func(o *options) { o.dialer = d }
 }
