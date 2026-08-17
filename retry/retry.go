@@ -23,6 +23,11 @@
 // リトライは「最大試行回数」と「コンテキストの終了」で打ち切られます。
 // 経過時間による打ち切りは既定で無効です（WithMaxElapsedTime で有効化できます）。
 //
+// # 待機時間のヒント
+//
+// 操作が返すエラーが DelayHinter を実装している場合、次の待機時間は
+// 指数バックオフの算出値ではなくその指示値になります（HTTP の Retry-After 対応など）。
+//
 // # エラー
 //
 // 失敗時に返るのは *Error で、errors.Is により ErrExhausted / ErrPermanent /
@@ -34,6 +39,7 @@ package retry
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/cenkalti/backoff/v5"
@@ -87,6 +93,12 @@ func RunValue[T any](ctx context.Context, op func() (T, error), opts ...Option) 
 			permanent = true
 			return v, backoff.Permanent(err)
 		}
+
+		// エラーが待機時間を明示している場合は backoff.RetryAfterError を連結して
+		// 次回間隔として伝える。元のエラーは lastErr に保持済みのため報告は汚れない。
+		if d, ok := retryAfterHint(err); ok {
+			return v, errors.Join(err, &backoff.RetryAfterError{Duration: d})
+		}
 		return v, err
 	}
 
@@ -102,8 +114,10 @@ func RunValue[T any](ctx context.Context, op func() (T, error), opts ...Option) 
 		backoff.WithMaxElapsedTime(s.maxElapsedTime),
 	}
 	if s.notify != nil {
-		boOpts = append(boOpts, backoff.WithNotify(func(err error, next time.Duration) {
-			s.notify(err, attempts, next)
+		boOpts = append(boOpts, backoff.WithNotify(func(_ error, next time.Duration) {
+			// backoff から渡るエラーは RetryAfterError の連結などの内部表現を含みうる
+			// ため、フックには操作が返した元のエラーを渡す。
+			s.notify(lastErr, attempts, next)
 		}))
 	}
 
@@ -129,4 +143,15 @@ func addSaturating(a, b uint) uint {
 		return ^uint(0)
 	}
 	return a + b
+}
+
+// retryAfterHint は、エラーチェーンから DelayHinter による待機時間の指示を取り出します。
+func retryAfterHint(err error) (time.Duration, bool) {
+	var h DelayHinter
+	if errors.As(err, &h) {
+		if d := h.RetryAfter(); d > 0 {
+			return d, true
+		}
+	}
+	return 0, false
 }

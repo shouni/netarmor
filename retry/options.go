@@ -28,6 +28,18 @@ type ShouldRetryFunc func(error) bool
 // ログ出力やメトリクス送信に使用してください。
 type NotifyFunc func(err error, attempt uint, next time.Duration)
 
+// DelayHinter は、次のリトライまで最低限待つべき時間をエラー自身が
+// 提示するためのインターフェースです。HTTP 429/503 の Retry-After ヘッダーの
+// ように、サーバが待機時間を指定してきた場合にエラー型へ実装してください。
+//
+// 判定は errors.As で行われるため、ラップされたエラーでも機能します。
+// RetryAfter が正の値を返すと、次の待機時間は指数バックオフの算出値の代わりに
+// その値になり、以降のバックオフ計算はリセットされます。0 以下の値は無視されます。
+// WithMaxElapsedTime やコンテキストによる打ち切りは通常どおり適用されます。
+type DelayHinter interface {
+	RetryAfter() time.Duration
+}
+
 // settings は Run / RunValue の内部設定です。
 type settings struct {
 	name                string
@@ -68,9 +80,7 @@ func WithName(name string) Option {
 }
 
 // WithMaxRetries は初回実行に加えて行うリトライの最大回数を設定します。
-//
 // 0 を指定すると「リトライせず 1 回だけ実行する」という意味になります。
-// これは Config.MaxRetries と異なる点です（Config は 0 を未設定として既定値に補完します）。
 func WithMaxRetries(n uint) Option {
 	return func(s *settings) { s.maxRetries = n }
 }
@@ -86,14 +96,22 @@ func WithMaxAttempts(n uint) Option {
 	}
 }
 
-// WithInitialInterval は初回リトライまでの待機時間を設定します。
+// WithInitialInterval は初回リトライまでの待機時間を設定します。負値は無視されます。
 func WithInitialInterval(d time.Duration) Option {
-	return func(s *settings) { s.initialInterval = d }
+	return func(s *settings) {
+		if d >= 0 {
+			s.initialInterval = d
+		}
+	}
 }
 
-// WithMaxInterval は待機時間の上限を設定します。
+// WithMaxInterval は待機時間の上限を設定します。負値は無視されます。
 func WithMaxInterval(d time.Duration) Option {
-	return func(s *settings) { s.maxInterval = d }
+	return func(s *settings) {
+		if d >= 0 {
+			s.maxInterval = d
+		}
+	}
 }
 
 // WithMultiplier は待機時間の増加倍率を設定します。1.0 で固定間隔になります。
@@ -118,8 +136,13 @@ func WithRandomizationFactor(f float64) Option {
 
 // WithMaxElapsedTime はリトライ全体の経過時間の上限を設定します。
 // 0 を指定すると無効化され、回数とコンテキストのみで打ち切られます（既定）。
+// 負値は無視されます。
 func WithMaxElapsedTime(d time.Duration) Option {
-	return func(s *settings) { s.maxElapsedTime = d }
+	return func(s *settings) {
+		if d >= 0 {
+			s.maxElapsedTime = d
+		}
+	}
 }
 
 // WithShouldRetry はリトライすべきエラーかどうかの判定関数を設定します。

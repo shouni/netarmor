@@ -50,6 +50,7 @@ Key invariants to preserve:
 - **`policy.isRestricted` calls `Unmap()` first.** Without it, `::ffff:127.0.0.1` bypasses the IPv4 predicates. Evaluation order is allowlist → stdlib predicates → blocked prefixes; the allowlist wins over everything.
 - **fail-closed on multi-address hosts**: one restricted IP rejects the whole connection. Never "pick the safe IP" — resolution order is attacker-influenced.
 - **`defaultOptions` wraps the shared prefix slice in `slices.Clip`** so `WithBlockedCIDRs`' `append` can't mutate the package-level backing array.
+- **IPv4-embedding transition ranges (NAT64 `64:ff9b::/96` + `64:ff9b:1::/48`, 6to4 `2002::/16` + `192.88.99.0/24`, Teredo `2001::/32`) are blocked wholesale**, not by extracting and checking the embedded IPv4 — extraction would interact badly with allowlist semantics and add parsing surface. NAT64 users opt in via `WithAllowedCIDRs` (documented on `defaultBlockedPrefixes`).
 
 ### `retry` — backoff wrapper
 
@@ -62,6 +63,8 @@ Built on `cenkalti/backoff/v5`, whose API differs from v4 in ways that matter he
 - On context cancellation `backoff.Retry` returns `context.Cause(ctx)` and **discards the operation's last error**. `RunValue` therefore tracks `lastErr` in the closure and stores both in `*Error`. Removing that closure state silently loses the failure cause.
 
 `Run` delegates to `RunValue[struct{}]` — keep the logic in one place.
+
+Retry-After support: an operation error whose chain implements `DelayHinter` (`RetryAfter() time.Duration`, detected with `errors.As`) overrides the next backoff interval. The closure joins the op error with `*backoff.RetryAfterError` via `errors.Join`; backoff then uses that duration and resets its schedule. Because the joined error is an internal representation, the notify adapter passes `lastErr` (the original op error) to the hook, and `*Error.Err` stays the original too. `ShouldRetryFunc` returning false takes precedence over any hint.
 
 `*Error` implements multi-error `Unwrap() []error`, so `errors.Is` matches the operation error, the context cause, *and* exactly one of `ErrPermanent` / `ErrExhausted`. The `Permanent` flag drives that classification; it's set in the closure when `shouldRetry` returns false.
 

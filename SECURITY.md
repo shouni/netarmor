@@ -27,7 +27,7 @@ GitHub の [Private vulnerability reporting](https://github.com/shouni/netarmor/
 
 ### 防御対象
 
-- **SSRF**: プライベート / ループバック / リンクローカル / CGNAT / 予約済みアドレスへの接続
+- **SSRF**: プライベート / ループバック / リンクローカル / CGNAT / 予約済みアドレス、および NAT64 / 6to4 / Teredo のような IPv4 を埋め込める変換範囲への接続（既定のブロック対象の一覧は README を参照）
 - **DNS Rebinding (TOCTOU)**: 検証後・接続前に DNS 応答が差し替えられる攻撃。`NewSafeHTTPClient` および `NewSafeTransport` は接続直前に名前解決を行い、**検証済みの IP アドレスに対して直接ダイヤル**することで防ぎます
 - **IPv4-mapped IPv6 による回避**: `::ffff:127.0.0.1` のような表記は `netip.Addr.Unmap()` で正規化してから判定します
 - **プロキシ経由の迂回**: 環境変数 `HTTP_PROXY` / `HTTPS_PROXY` は既定で無効です
