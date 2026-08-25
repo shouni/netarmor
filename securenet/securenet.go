@@ -136,10 +136,13 @@ func (o *options) newTransport(timeout time.Duration) *http.Transport {
 
 	// DialTLSContext が設定されていると、HTTPS では DialContext が呼ばれず
 	// IP 検証が丸ごと迂回される（net/http の仕様）。安全側に倒して無効化する。
-	// 非推奨の Dial / DialTLS も同じ理由で落とす。
+	//
+	// 非推奨の DialTLS / Dial も落とす。DialTLS は DialTLSContext が nil のときの
+	// フォールバックとして net/http の customDialTLS で現役のため、消さないと穴が残る。
+	// Dial は DialContext を必ず設定するので到達しないが、多層防御として揃えておく。
 	transport.DialTLSContext = nil
-	transport.DialTLS = nil
-	transport.Dial = nil
+	transport.DialTLS = nil //nolint:staticcheck // 使うためではなく、検証を迂回されないよう無効化するための代入
+	transport.Dial = nil    //nolint:staticcheck // 同上
 
 	return transport
 }

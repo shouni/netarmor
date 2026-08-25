@@ -548,10 +548,10 @@ func TestNewSafeTransport(t *testing.T) {
 		if transport.DialTLSContext != nil {
 			t.Error("transport.DialTLSContext は nil であるべきです")
 		}
-		if transport.DialTLS != nil {
+		if transport.DialTLS != nil { //nolint:staticcheck // 非推奨フィールドが無効化されていることの確認
 			t.Error("transport.DialTLS は nil であるべきです")
 		}
-		if transport.Dial != nil {
+		if transport.Dial != nil { //nolint:staticcheck // 同上
 			t.Error("transport.Dial は nil であるべきです")
 		}
 		if transport.DialContext == nil {
