@@ -1,10 +1,5 @@
 module github.com/shouni/netarmor
 
-go 1.26
+go 1.27
 
-require (
-	github.com/cenkalti/backoff/v5 v5.0.3
-	github.com/stretchr/testify v1.12.1
-)
-
-require go.yaml.in/yaml/v3 v3.0.5 // indirect
+require github.com/cenkalti/backoff/v7 v7.0.0

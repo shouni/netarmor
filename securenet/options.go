@@ -101,7 +101,9 @@ func (p *policy) isRestricted(addr netip.Addr) bool {
 		return !p.allowPrivate
 	case a.IsLinkLocalUnicast(), a.IsLinkLocalMulticast():
 		return !p.allowLinkLocal
-	case a.IsUnspecified(), a.IsMulticast(), a.IsInterfaceLocalMulticast():
+	// IsMulticast は IPv6 の ff00::/8 全体を含むため、インターフェースローカル
+	// マルチキャスト (ff01::/16) の判定は不要。
+	case a.IsUnspecified(), a.IsMulticast():
 		return true
 	}
 
@@ -208,7 +210,8 @@ func WithAllowedPrefixes(prefixes ...netip.Prefix) Option {
 }
 
 // WithBlockedCIDRs は、既定のブロック一覧に追加でネットワークを登録します。
-// 不正な CIDR 表記は無視されます。
+//
+// 不正な CIDR 表記は無視されます。事前に検証したい場合は netip.ParsePrefix を使用してください。
 func WithBlockedCIDRs(cidrs ...string) Option {
 	return func(o *options) {
 		for _, c := range cidrs {
@@ -240,8 +243,14 @@ func WithAllowLinkLocal() Option {
 }
 
 // WithBaseTransport は、複製元となる *http.Transport を指定します。
-// 指定した Transport は複製された上で Proxy と DialContext が上書きされます。
 // HTTP/2 設定やコネクションプールの調整を持ち込みたい場合に使用します。
+//
+// 指定した Transport は複製された上で、次のフィールドが securenet に上書きされます。
+//
+//   - Proxy / DialContext : 検証付きの実装に差し替えられます。
+//   - DialTLSContext / DialTLS / Dial : nil にされます。DialTLSContext が
+//     設定されていると HTTPS で DialContext が呼ばれず IP 検証が迂回されるため、
+//     本パッケージでは無効化します。TLS の設定は TLSClientConfig で行ってください。
 func WithBaseTransport(t *http.Transport) Option {
 	return func(o *options) { o.baseTransport = t }
 }
@@ -256,6 +265,9 @@ func WithDialer(d *net.Dialer) Option {
 
 // WithMaxRedirects は追従するリダイレクトの最大回数を設定します。
 // 0 を指定するとリダイレクトを一切追従しません。負値は既定値 (10) として扱われます。
+//
+// 上限に達した場合、リクエストは *TooManyRedirectsError で失敗します
+// (errors.Is(err, ErrTooManyRedirects) が true)。
 func WithMaxRedirects(n int) Option {
 	return func(o *options) {
 		if n >= 0 {
@@ -265,7 +277,9 @@ func WithMaxRedirects(n int) Option {
 }
 
 // WithAllowRedirectDowngrade は https から http へのリダイレクト追従を許可します。
-// 既定ではダウングレードを伴うリダイレクトは拒否されます。
+//
+// 既定ではダウングレードを伴うリダイレクトは *RedirectDowngradeError で拒否されます
+// (errors.Is(err, ErrRedirectDowngrade) が true)。
 func WithAllowRedirectDowngrade() Option {
 	return func(o *options) { o.allowDowngrade = true }
 }

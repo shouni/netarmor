@@ -38,7 +38,6 @@ GitHub の [Private vulnerability reporting](https://github.com/shouni/netarmor/
 以下は本パッケージの責務ではありません。利用側での対策が必要です。
 
 - **`ValidateURL` 単体での使用**: 静的検証のみでは DNS Rebinding を防げません。必ず `NewSafeHTTPClient` / `NewSafeTransport` と併用してください
-- **`gs://` および `s3://` スキーム**: クラウド SDK が独自に接続先を決定するため、名前解決・IP 検証を行わずに許可されます
 - **`WithProxy` 有効時の最終宛先**: 接続先はプロキシサーバになるため、最終的な宛先 IP は検証されません
 - **`WithAllowLoopback` / `WithAllowPrivate` / `WithAllowLinkLocal` 有効時**: 明示的にポリシーを緩めた場合の結果は利用側の責任です
 - **レスポンスボディのサイズ・内容**: 展開爆弾やレスポンス内容の検証は行いません

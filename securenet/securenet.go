@@ -1,5 +1,5 @@
 // Package securenet は、SSRF (Server-Side Request Forgery) 対策として、
-// URLのスキーム検証やDNS Rebinding対策済みのHTTPクライアント生成を行うユーティリティを提供します。
+// URL のスキーム検証や DNS Rebinding 対策済みの HTTP クライアント生成を行うユーティリティを提供します。
 //
 // # 二段構えの防御
 //
@@ -39,16 +39,12 @@ import (
 )
 
 const (
-	// SchemeHTTP は平文HTTPスキームを表します。
+	// SchemeHTTP は平文 HTTP スキームを表します。
 	// IsSecureServiceURL ではローカル開発ホスト名との組み合わせでのみ許可されます
 	// （ValidateURL と接続時検証では制限対象でないホストへの http は許可されます）。
 	SchemeHTTP = "http"
-	// SchemeHTTPS は暗号化されたHTTPSスキームを表します。
+	// SchemeHTTPS は暗号化された HTTPS スキームを表します。
 	SchemeHTTPS = "https"
-	// SchemeGCS は Google Cloud Storage の URI スキームを表します。
-	SchemeGCS = "gs"
-	// SchemeS3 は Amazon S3 の URI スキームを表します。
-	SchemeS3 = "s3"
 )
 
 // localdevHostnames は、ローカル開発環境で一般的に使用されるホスト名のセットです。
@@ -99,8 +95,8 @@ func IsSecureServiceURL(serviceURL string) bool {
 //		// 許可されていないスキーム
 //	}
 //
-// gs:// および s3:// スキームは、クラウド SDK が独自に接続先を決定するため
-// 名前解決を行わずに許可されます。
+// 許可されるスキームは http と https だけです。それ以外はすべて
+// ErrDisallowedScheme になります。
 //
 // 名前解決のタイムアウトは ctx で制御してください。本関数は独自のタイムアウトを設定しません。
 func ValidateURL(ctx context.Context, rawURL string, opts ...Option) error {
@@ -115,7 +111,7 @@ func NewSafeTransport(timeout time.Duration, opts ...Option) *http.Transport {
 	return newOptions(opts).newTransport(timeout)
 }
 
-// NewSafeHTTPClient は、接続直前にIP検証を行うことでDNS Rebindingを防ぐクライアントを生成します。
+// NewSafeHTTPClient は、接続直前に IP 検証を行うことで DNS Rebinding を防ぐクライアントを生成します。
 //
 // 既定では以下のポリシーが適用されます。
 //   - プライベート / ループバック / リンクローカル等への接続を拒否
@@ -134,26 +130,61 @@ func NewSafeHTTPClient(timeout time.Duration, opts ...Option) *http.Client {
 
 // newTransport は options から検証付き Transport を生成します。
 func (o *options) newTransport(timeout time.Duration) *http.Transport {
-	base := o.baseTransport
-	if base == nil {
-		base = http.DefaultTransport.(*http.Transport)
-	}
-
-	transport := base.Clone()
+	transport := o.cloneBaseTransport()
 	transport.Proxy = o.proxy
 	transport.DialContext = o.dialContext(o.newDialer(timeout))
+
+	// DialTLSContext が設定されていると、HTTPS では DialContext が呼ばれず
+	// IP 検証が丸ごと迂回される（net/http の仕様）。安全側に倒して無効化する。
+	//
+	// 非推奨の DialTLS / Dial も落とす。DialTLS は DialTLSContext が nil のときの
+	// フォールバックとして net/http の customDialTLS で現役のため、消さないと穴が残る。
+	// Dial は DialContext を必ず設定するので到達しないが、多層防御として揃えておく。
+	transport.DialTLSContext = nil
+	transport.DialTLS = nil //nolint:staticcheck // 使うためではなく、検証を迂回されないよう無効化するための代入
+	transport.Dial = nil    //nolint:staticcheck // 同上
+
 	return transport
+}
+
+// cloneBaseTransport は複製元の Transport を決定して複製します。
+func (o *options) cloneBaseTransport() *http.Transport {
+	if o.baseTransport != nil {
+		return o.baseTransport.Clone()
+	}
+	// http.DefaultTransport は計装ライブラリ等にグローバルで差し替えられている
+	// ことがある。型アサーションで panic しないよう、*http.Transport でなければ
+	// 標準と同等の既定値から組み立てる。
+	if dt, ok := http.DefaultTransport.(*http.Transport); ok {
+		return dt.Clone()
+	}
+	return &http.Transport{
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: time.Second,
+	}
 }
 
 // dialContext は、接続直前に名前解決と IP 検証を行うダイヤル関数を返します。
 func (o *options) dialContext(dialer *net.Dialer) func(context.Context, string, string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		// net.Dialer.Timeout は DialContext 1 回ごとに適用されるため、解決した
+		// アドレスごとに呼ぶと合計で「アドレス数 × timeout」まで伸びうる。
+		// 標準の net.Dialer と同じく、名前解決を含む 1 回のダイヤル全体を上限とする。
+		if dialer.Timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, dialer.Timeout)
+			defer cancel()
+		}
+
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
 			return nil, fmt.Errorf("securenet: split host port %q: %w", addr, err)
 		}
 
-		// 接続直前に名前解決を行い、解決されたIPを即座にチェックする (TOCTOU対策)
+		// 接続直前に名前解決を行い、解決された IP を即座に検証する (TOCTOU 対策)
 		addrs, err := o.resolveAndCheck(ctx, host)
 		if err != nil {
 			return nil, err
@@ -177,14 +208,15 @@ func (o *options) dialContext(dialer *net.Dialer) func(context.Context, string, 
 }
 
 // checkRedirect はリダイレクト追従の可否を判定します。
+// 返すエラーは errors.Is で ErrTooManyRedirects / ErrRedirectDowngrade と比較できます。
 func (o *options) checkRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) > o.maxRedirects {
-		return fmt.Errorf("securenet: stopped after %d redirects", o.maxRedirects)
+		return &TooManyRedirectsError{Max: o.maxRedirects}
 	}
 	if !o.allowDowngrade && len(via) > 0 {
 		prev := via[len(via)-1]
 		if prev.URL.Scheme == SchemeHTTPS && req.URL.Scheme == SchemeHTTP {
-			return fmt.Errorf("securenet: refusing redirect downgrade from https to http (%s)", req.URL.Redacted())
+			return &RedirectDowngradeError{URL: req.URL.Redacted()}
 		}
 	}
 	return nil
@@ -198,9 +230,6 @@ func (o *options) validateURL(ctx context.Context, rawURL string) error {
 	}
 
 	switch strings.ToLower(parsed.Scheme) {
-	case SchemeGCS, SchemeS3:
-		// クラウドストレージ SDK が接続先を決定するため、ここでは検証しない。
-		return nil
 	case SchemeHTTP, SchemeHTTPS:
 		// 検証を続行
 	default:
@@ -245,9 +274,6 @@ func (o *options) resolveAndCheck(ctx context.Context, host string) ([]netip.Add
 
 // isLocalDevHostname は、指定されたホスト名が既知のローカル開発ホスト名と一致するかどうかを確認します。
 func isLocalDevHostname(hostname string) bool {
-	if hostname == "" {
-		return false
-	}
 	_, ok := localdevHostnames[hostname]
 	return ok
 }

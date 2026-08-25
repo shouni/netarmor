@@ -118,8 +118,8 @@ func TestRun(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("context.Canceled を期待していましたが、異なります: %v", err)
 		}
-		// backoff v5 はコンテキスト終了時に操作エラーを捨てるため、
-		// *Error 側で保持できていることを確認する。
+		// 打ち切り理由と最後の操作エラーの両方を *Error 側で
+		// 保持できていることを確認する。
 		if !errors.Is(err, opErr) {
 			t.Errorf("最後の操作エラーが失われています: %v", err)
 		}
@@ -256,9 +256,10 @@ func TestRun(t *testing.T) {
 	t.Run("WithMaxElapsedTime で経過時間により打ち切られること", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			calls := 0
-			_ = retry.Run(ctx, func() error {
+			opErr := errors.New("boom")
+			err := retry.Run(ctx, func() error {
 				calls++
-				return errors.New("boom")
+				return opErr
 			},
 				retry.WithMaxRetries(1000),
 				retry.WithInitialInterval(20*time.Millisecond),
@@ -271,6 +272,16 @@ func TestRun(t *testing.T) {
 			// 次は 60ms で MaxElapsedTime(50ms) を越えるため 3 回で止まる。
 			if calls != 3 {
 				t.Errorf("経過時間で打ち切られていません: %d 回実行されました, want 3", calls)
+			}
+			// 経過時間による打ち切りも「打ち切り」として ErrExhausted に分類する。
+			if !errors.Is(err, retry.ErrExhausted) {
+				t.Errorf("ErrExhausted を期待していましたが、異なります: %v", err)
+			}
+			if !errors.Is(err, opErr) {
+				t.Errorf("最後の操作エラーが失われています: %v", err)
+			}
+			if errors.Is(err, retry.ErrPermanent) {
+				t.Errorf("ErrPermanent になってはいけません: %v", err)
 			}
 		})
 	})
@@ -405,6 +416,101 @@ func TestRetryAfterHint(t *testing.T) {
 		}
 		if !errors.Is(err, retry.ErrPermanent) {
 			t.Errorf("ErrPermanent を期待していましたが、異なります: %v", err)
+		}
+	})
+}
+
+func TestRunCtx(t *testing.T) {
+	t.Run("操作に呼び出し側の ctx が渡されること", func(t *testing.T) {
+		type key struct{}
+		ctx := context.WithValue(context.Background(), key{}, "marker")
+
+		var got any
+		err := retry.RunCtx(ctx, func(ctx context.Context) error {
+			got = ctx.Value(key{})
+			return nil
+		})
+
+		if err != nil {
+			t.Errorf("期待しないエラーが発生しました: %v", err)
+		}
+		if got != "marker" {
+			t.Errorf("ctx が渡されていません: %v", got)
+		}
+	})
+
+	t.Run("操作が ctx を監視していればリトライ中に中断できること", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			cancelCtx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			calls := 0
+			opErr := errors.New("boom")
+			err := retry.RunCtx(cancelCtx, func(ctx context.Context) error {
+				calls++
+				if calls == 2 {
+					cancel()
+				}
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return opErr
+			}, fastOpts(retry.WithMaxRetries(10))...)
+
+			if calls != 2 {
+				t.Errorf("試行回数が不正です: 期待 2, 実績 %d", calls)
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("context.Canceled を期待していましたが、異なります: %v", err)
+			}
+		})
+	})
+
+	t.Run("失敗: nil Operation は即座にエラーになること", func(t *testing.T) {
+		if err := retry.RunCtx(context.Background(), nil); !errors.Is(err, retry.ErrNilOperation) {
+			t.Errorf("ErrNilOperation を期待していましたが、異なります: %v", err)
+		}
+	})
+
+	t.Run("nil context は Background として操作に渡されること", func(t *testing.T) {
+		var nilCtx context.Context
+		err := retry.RunCtx(nilCtx, func(ctx context.Context) error {
+			if ctx == nil {
+				t.Error("操作に nil の ctx が渡されました")
+			}
+			return nil
+		})
+		if err != nil {
+			t.Errorf("期待しないエラーが発生しました: %v", err)
+		}
+	})
+}
+
+func TestRunValueCtx(t *testing.T) {
+	t.Run("リトライ後に値を返せること", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			calls := 0
+			got, err := retry.RunValueCtx(context.Background(), func(ctx context.Context) (int, error) {
+				calls++
+				if calls < 2 {
+					return 0, errors.New("boom")
+				}
+				return 42, ctx.Err()
+			}, fastOpts()...)
+
+			if err != nil {
+				t.Errorf("期待しないエラーが発生しました: %v", err)
+			}
+			if got != 42 {
+				t.Errorf("値が不正です: 期待 42, 実績 %d", got)
+			}
+		})
+	})
+
+	t.Run("失敗: nil Operation は即座にエラーになること", func(t *testing.T) {
+		_, err := retry.RunValueCtx[int](context.Background(), nil)
+		if !errors.Is(err, retry.ErrNilOperation) {
+			t.Errorf("ErrNilOperation を期待していましたが、異なります: %v", err)
 		}
 	})
 }

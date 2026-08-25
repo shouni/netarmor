@@ -68,8 +68,6 @@ func FuzzValidateURL(f *testing.F) {
 
 		scheme := strings.ToLower(u.Scheme)
 		switch scheme {
-		case securenet.SchemeGCS, securenet.SchemeS3:
-			// クラウドストレージは名前解決なしで許可される
 		case securenet.SchemeHTTP, securenet.SchemeHTTPS:
 			if u.Hostname() == "" {
 				t.Fatalf("ホストが空なのに成功しました: %q", raw)

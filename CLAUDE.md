@@ -29,7 +29,7 @@ go test ./securenet -run '^$' -fuzz FuzzIsSecureServiceURL -fuzztime 30s
 golangci-lint run
 ```
 
-CI (`.github/workflows/ci.yml`) also runs `govulncheck` and uploads a coverage profile. Go version comes from `go.mod` (currently 1.26 — `errors.AsType`, `slices`, and `net/netip` are all fair game).
+CI (`.github/workflows/ci.yml`) also runs `govulncheck` and uploads a coverage profile. Go version comes from `go.mod` (currently 1.27 — `errors.AsType`, `slices`, and `net/netip` are all fair game).
 
 ## Architecture
 
@@ -39,7 +39,7 @@ Three files: `securenet.go` (public entry points + validation core), `options.go
 
 Two distinct layers that are meant to be used together; do not collapse them:
 
-1. **Static validation** (`ValidateURL`) — parses the URL, allows `gs://` and `s3://` unconditionally (cloud SDKs handle their own routing), allows `http`/`https` only after resolving the hostname and rejecting any restricted IP. Takes no internal timeout; the caller's `ctx` governs.
+1. **Static validation** (`ValidateURL`) — parses the URL, allows `http`/`https` only after resolving the hostname and rejecting any restricted IP; every other scheme is `ErrDisallowedScheme` — `gs://` / `s3://` used to be waved through for cloud SDKs and no longer are. Takes no internal timeout; the caller's `ctx` governs.
 2. **Connect-time validation** (`NewSafeHTTPClient` / `NewSafeTransport`) — the real TOCTOU defense. `options.dialContext` resolves the host itself, rejects if *any* returned IP is restricted, then dials the **already-resolved IP** rather than the hostname, so a rebinding DNS answer between check and connect cannot be exploited. Re-dialing by hostname would reintroduce the hole.
 
 `IsSecureServiceURL` is a separate, weaker policy check (no DNS): HTTPS always OK, HTTP only for hostnames in `localdevHostnames`, empty host rejected. It answers "is this service URL configured sensibly", not "is it safe to fetch".
@@ -47,6 +47,8 @@ Two distinct layers that are meant to be used together; do not collapse them:
 Key invariants to preserve:
 
 - **`transport.Proxy` defaults to `nil`** so `HTTP_PROXY`/`HTTPS_PROXY` cannot route around the IP check. Only `WithProxy`/`WithProxyFromEnvironment` may set it. Note the trap documented on `WithProxy`: once a proxy is set, `DialContext` sees the *proxy's* address, so a private-IP proxy is itself blocked unless allowed via `WithAllowedCIDRs`.
+- **`newTransport` nils out `DialTLSContext` / `DialTLS` / `Dial` after cloning the base transport.** `net/http` prefers `DialTLSContext` over `DialContext` for HTTPS, so a base transport carrying one would bypass IP validation entirely. `cloneBaseTransport` also type-asserts `http.DefaultTransport` with comma-ok — instrumentation libraries replace it globally, and a bare assertion panics.
+- **The dial timeout bounds the whole `DialContext` call, not each address.** `net.Dialer.Timeout` applies per `DialContext` invocation, and the loop calls it once per resolved IP, so without the wrapping `context.WithTimeout` a 4-address host could take 4× the timeout. `NewSafeTransport` users have no `http.Client.Timeout` to catch that.
 - **`policy.isRestricted` calls `Unmap()` first.** Without it, `::ffff:127.0.0.1` bypasses the IPv4 predicates. Evaluation order is allowlist → stdlib predicates → blocked prefixes; the allowlist wins over everything.
 - **fail-closed on multi-address hosts**: one restricted IP rejects the whole connection. Never "pick the safe IP" — resolution order is attacker-influenced.
 - **`defaultOptions` wraps the shared prefix slice in `slices.Clip`** so `WithBlockedCIDRs`' `append` can't mutate the package-level backing array.
@@ -56,17 +58,17 @@ Key invariants to preserve:
 
 Three files: `retry.go` (`Run`/`RunValue`), `options.go` (`settings`, all `With*` options, defaults), `errors.go` (`*Error` + sentinels).
 
-Built on `cenkalti/backoff/v5`, whose API differs from v4 in ways that matter here:
+Built on `cenkalti/backoff/v7`, whose API has details that matter here:
 
 - `backoff.WithMaxTries(n)` counts **total attempts**, not retries — hence `addSaturating(s.maxRetries, 1)`.
 - `MaxElapsedTime` defaults to 15 minutes upstream, so `WithMaxElapsedTime(s.maxElapsedTime)` is always passed (default 0 = disabled). Retries are bounded by count and context only.
-- On context cancellation `backoff.Retry` returns `context.Cause(ctx)` and **discards the operation's last error**. `RunValue` therefore tracks `lastErr` in the closure and stores both in `*Error`. Removing that closure state silently loses the failure cause.
+- `backoff.Retry` returns a `*backoff.RetryError` on **every** failure, carrying both `LastErr` (the last operation error) and `Cause` (why it stopped: `ErrPermanent` / `ErrExhausted` / `ErrMaxElapsedTime` / the context cause). `newError` is the single place that maps that onto `*Error` — don't reintroduce closure-tracked `lastErr`/`permanent` state, the upstream error is now the source of truth.
 
-`Run` delegates to `RunValue[struct{}]` — keep the logic in one place.
+`Run` delegates to `RunValue[struct{}]`, and `RunCtx` / `RunValueCtx` (the variants whose *operation* takes a `ctx`) delegate down to the same place — keep the retry logic in `RunValue` only. `RunValueCtx` normalizes a nil `ctx` before capturing it, so the operation never receives nil.
 
-Retry-After support: an operation error whose chain implements `DelayHinter` (`RetryAfter() time.Duration`, detected with `errors.As`) overrides the next backoff interval. The closure joins the op error with `*backoff.RetryAfterError` via `errors.Join`; backoff then uses that duration and resets its schedule. Because the joined error is an internal representation, the notify adapter passes `lastErr` (the original op error) to the hook, and `*Error.Err` stays the original too. `ShouldRetryFunc` returning false takes precedence over any hint.
+Retry-After support: an operation error whose chain implements `DelayHinter` (`RetryAfter() time.Duration`, detected with `errors.As` — `errors.AsType` can't be used, `DelayHinter` doesn't embed `error`) overrides the next backoff interval. The closure returns `backoff.RetryAfter(d, err)`; backoff waits that duration, resets its schedule, and keeps `err` as the `RetryError.LastErr` should retrying later stop. The hook still needs the unwrapped original, since `WithNotify` is handed the `*backoff.RetryAfterError` itself — that's what `unwrapRetryAfter` is for. `ShouldRetryFunc` returning false takes precedence over any hint.
 
-`*Error` implements multi-error `Unwrap() []error`, so `errors.Is` matches the operation error, the context cause, *and* exactly one of `ErrPermanent` / `ErrExhausted`. The `Permanent` flag drives that classification; it's set in the closure when `shouldRetry` returns false.
+`*Error` implements multi-error `Unwrap() []error`, so `errors.Is` matches the operation error, the context cause, *and* exactly one of `ErrPermanent` / `ErrExhausted`. The `Permanent` flag drives that classification; `newError` sets it from `RetryError.Cause`. `Error.Cause` holds *only* context causes — `ErrMaxElapsedTime` is deliberately folded into `ErrExhausted` (as it was under v5, where it surfaced as a discarded `context.DeadlineExceeded`) so the package's own sentinels stay the whole classification surface.
 
 ## Conventions
 
@@ -74,5 +76,5 @@ Retry-After support: an operation error whose chain implements `DelayHinter` (`R
 - Both test packages are **external** (`securenet_test`, `retry_test`) — black-box only. If something needs internal access, prefer exposing it properly over switching the package.
 - **`securenet` tests are hermetic**: every path that resolves a name injects `WithResolver(...)`. IP-literal hosts skip the resolver entirely (`resolveAndCheck` parses them directly), which is why the `httptest` cases work without one. Never add a test that hits real DNS.
 - `retry` tests use millisecond intervals and `WithRandomizationFactor(0)` for determinism — never wait on the default 5s/30s intervals.
-- Testify (`assert`/`require`) is used in `securenet`; `retry` uses plain `testing`.
+- **No assertion library — both packages use plain `testing`.** netarmor is a base dependency in ~21 sibling `go.mod` files, and a test-only requirement still lands in every consumer's `go.sum` (verified: testify pulled `go.yaml.in/yaml/v3` in with it). `cenkalti/backoff/v7` is the module's only requirement; keep it that way.
 - Examples in `example_test.go` carry `// Output:` comments, so they run as tests. Keep them deterministic (fixed resolver, zero jitter).
