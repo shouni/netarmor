@@ -76,5 +76,5 @@ Retry-After support: an operation error whose chain implements `DelayHinter` (`R
 - Both test packages are **external** (`securenet_test`, `retry_test`) — black-box only. If something needs internal access, prefer exposing it properly over switching the package.
 - **`securenet` tests are hermetic**: every path that resolves a name injects `WithResolver(...)`. IP-literal hosts skip the resolver entirely (`resolveAndCheck` parses them directly), which is why the `httptest` cases work without one. Never add a test that hits real DNS.
 - `retry` tests use millisecond intervals and `WithRandomizationFactor(0)` for determinism — never wait on the default 5s/30s intervals.
-- Testify (`assert`/`require`) is used in `securenet`; `retry` uses plain `testing`.
+- **No assertion library — both packages use plain `testing`.** netarmor is a base dependency in ~21 sibling `go.mod` files, and a test-only requirement still lands in every consumer's `go.sum` (verified: testify pulled `go.yaml.in/yaml/v3` in with it). `cenkalti/backoff/v7` is the module's only requirement; keep it that way.
 - Examples in `example_test.go` carry `// Output:` comments, so they run as tests. Keep them deterministic (fixed resolver, zero jitter).

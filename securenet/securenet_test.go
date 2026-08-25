@@ -7,13 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/shouni/netarmor/securenet"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // stubRoundTripper は *http.Transport ではない http.DefaultTransport を再現します。
@@ -94,7 +93,9 @@ func TestIsSecureServiceURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, securenet.IsSecureServiceURL(tt.inputURL), "URL: %s", tt.inputURL)
+			if got := securenet.IsSecureServiceURL(tt.inputURL); got != tt.want {
+				t.Errorf("URL %q: 期待 %v, 実績 %v", tt.inputURL, tt.want, got)
+			}
 		})
 	}
 }
@@ -159,11 +160,17 @@ func TestValidateURL(t *testing.T) {
 			err := securenet.ValidateURL(ctx, tt.inputURL, securenet.WithResolver(testResolver))
 
 			if tt.wantErr == nil {
-				assert.NoError(t, err)
+				if err != nil {
+					t.Errorf("期待しないエラーが発生しました: %v", err)
+				}
 				return
 			}
-			require.Error(t, err)
-			assert.ErrorIs(t, err, tt.wantErr)
+			if err == nil {
+				t.Fatal("エラーを期待していましたが nil でした")
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("%v を期待していましたが、異なります: %v", tt.wantErr, err)
+			}
 		})
 	}
 }
@@ -174,19 +181,31 @@ func TestValidateURL_ErrorDetails(t *testing.T) {
 	t.Run("BlockedIPError がホストとアドレスを保持すること", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "https://internal.test/api", securenet.WithResolver(testResolver))
 
-		var blocked *securenet.BlockedIPError
-		require.ErrorAs(t, err, &blocked)
-		assert.Equal(t, "internal.test", blocked.Host)
-		assert.Equal(t, netip.MustParseAddr("10.0.0.1"), blocked.Addr)
-		assert.ErrorIs(t, blocked, securenet.ErrRestrictedIP)
+		blocked, ok := errors.AsType[*securenet.BlockedIPError](err)
+		if !ok {
+			t.Fatalf("*BlockedIPError を期待していましたが、異なります: %v", err)
+		}
+		if blocked.Host != "internal.test" {
+			t.Errorf("blocked.Host が不正です: 期待 %v, 実績 %v", "internal.test", blocked.Host)
+		}
+		if blocked.Addr != netip.MustParseAddr("10.0.0.1") {
+			t.Errorf("blocked.Addr が不正です: 期待 %v, 実績 %v", netip.MustParseAddr("10.0.0.1"), blocked.Addr)
+		}
+		if !errors.Is(blocked, securenet.ErrRestrictedIP) {
+			t.Errorf("securenet.ErrRestrictedIP を期待していましたが、異なります: %v", blocked)
+		}
 	})
 
 	t.Run("SchemeError が拒否されたスキームを保持すること", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "FTP://example.com/file", securenet.WithResolver(testResolver))
 
-		var se *securenet.SchemeError
-		require.ErrorAs(t, err, &se)
-		assert.Equal(t, "ftp", se.Scheme)
+		se, ok := errors.AsType[*securenet.SchemeError](err)
+		if !ok {
+			t.Fatalf("*SchemeError を期待していましたが、異なります: %v", err)
+		}
+		if se.Scheme != "ftp" {
+			t.Errorf("se.Scheme が不正です: 期待 %v, 実績 %v", "ftp", se.Scheme)
+		}
 	})
 
 	t.Run("ResolveError が元のDNSエラーをラップすること", func(t *testing.T) {
@@ -194,26 +213,40 @@ func TestValidateURL_ErrorDetails(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "https://broken.test/api",
 			securenet.WithResolver(errResolver{err: dnsErr}))
 
-		var re *securenet.ResolveError
-		require.ErrorAs(t, err, &re)
-		assert.Equal(t, "broken.test", re.Host)
-		assert.ErrorIs(t, err, dnsErr)
+		re, ok := errors.AsType[*securenet.ResolveError](err)
+		if !ok {
+			t.Fatalf("*ResolveError を期待していましたが、異なります: %v", err)
+		}
+		if re.Host != "broken.test" {
+			t.Errorf("re.Host が不正です: 期待 %v, 実績 %v", "broken.test", re.Host)
+		}
+		if !errors.Is(err, dnsErr) {
+			t.Errorf("%v がラップされていません: %v", dnsErr, err)
+		}
 	})
 
 	t.Run("解決結果が空の場合に ErrNoAddresses になること", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "https://empty.test/api",
 			securenet.WithResolver(emptyResolver{}))
 
-		assert.ErrorIs(t, err, securenet.ErrNoAddresses)
+		if !errors.Is(err, securenet.ErrNoAddresses) {
+			t.Errorf("securenet.ErrNoAddresses を期待していましたが、異なります: %v", err)
+		}
 	})
 
 	t.Run("URLError が元のパースエラーをラップすること", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "://invalid", securenet.WithResolver(testResolver))
 
-		var ue *securenet.URLError
-		require.ErrorAs(t, err, &ue)
-		assert.Equal(t, "://invalid", ue.URL)
-		assert.ErrorIs(t, err, securenet.ErrInvalidURL)
+		ue, ok := errors.AsType[*securenet.URLError](err)
+		if !ok {
+			t.Fatalf("*URLError を期待していましたが、異なります: %v", err)
+		}
+		if ue.URL != "://invalid" {
+			t.Errorf("ue.URL が不正です: 期待 %v, 実績 %v", "://invalid", ue.URL)
+		}
+		if !errors.Is(err, securenet.ErrInvalidURL) {
+			t.Errorf("securenet.ErrInvalidURL を期待していましたが、異なります: %v", err)
+		}
 	})
 
 	t.Run("キャンセル済み context が伝播すること", func(t *testing.T) {
@@ -223,7 +256,9 @@ func TestValidateURL_ErrorDetails(t *testing.T) {
 		err := securenet.ValidateURL(canceled, "https://example.com",
 			securenet.WithResolver(errResolver{err: context.Canceled}))
 
-		assert.ErrorIs(t, err, context.Canceled)
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("context.Canceled を期待していましたが、異なります: %v", err)
+		}
 	})
 }
 
@@ -233,13 +268,17 @@ func TestValidateURL_PolicyOptions(t *testing.T) {
 	t.Run("WithAllowLoopback でループバックが許可されること", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "http://127.0.0.1:8080/admin",
 			securenet.WithResolver(testResolver), securenet.WithAllowLoopback())
-		assert.NoError(t, err)
+		if err != nil {
+			t.Errorf("期待しないエラーが発生しました: %v", err)
+		}
 	})
 
 	t.Run("WithAllowPrivate でプライベートIPが許可されること", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "https://internal.test/api",
 			securenet.WithResolver(testResolver), securenet.WithAllowPrivate())
-		assert.NoError(t, err)
+		if err != nil {
+			t.Errorf("期待しないエラーが発生しました: %v", err)
+		}
 	})
 
 	t.Run("WithAllowedCIDRs が個別のネットワークだけを許可すること", func(t *testing.T) {
@@ -248,24 +287,31 @@ func TestValidateURL_PolicyOptions(t *testing.T) {
 			securenet.WithAllowedCIDRs("10.0.0.0/8"),
 		}
 
-		assert.NoError(t, securenet.ValidateURL(ctx, "https://internal.test/api", opts...))
+		if err := securenet.ValidateURL(ctx, "https://internal.test/api", opts...); err != nil {
+			t.Errorf("期待しないエラーが発生しました: %v", err)
+		}
 		// 許可していない 192.168.0.0/16 は引き続き拒否される
-		assert.ErrorIs(t, securenet.ValidateURL(ctx, "http://192.168.1.1/", opts...),
-			securenet.ErrRestrictedIP)
+		if err := securenet.ValidateURL(ctx, "http://192.168.1.1/", opts...); !errors.Is(err, securenet.ErrRestrictedIP) {
+			t.Errorf("ErrRestrictedIP を期待していましたが、異なります: %v", err)
+		}
 	})
 
 	t.Run("WithAllowedPrefixes が WithAllowedCIDRs と等価であること", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "https://internal.test/api",
 			securenet.WithResolver(testResolver),
 			securenet.WithAllowedPrefixes(netip.MustParsePrefix("10.0.0.0/8")))
-		assert.NoError(t, err)
+		if err != nil {
+			t.Errorf("期待しないエラーが発生しました: %v", err)
+		}
 	})
 
 	t.Run("WithBlockedCIDRs で公開IPを追加ブロックできること", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "https://example.com/api",
 			securenet.WithResolver(testResolver),
 			securenet.WithBlockedCIDRs("93.184.216.0/24"))
-		assert.ErrorIs(t, err, securenet.ErrRestrictedIP)
+		if !errors.Is(err, securenet.ErrRestrictedIP) {
+			t.Errorf("securenet.ErrRestrictedIP を期待していましたが、異なります: %v", err)
+		}
 	})
 
 	t.Run("WithBlockedCIDRs が既定リストを破壊しないこと", func(t *testing.T) {
@@ -277,20 +323,26 @@ func TestValidateURL_PolicyOptions(t *testing.T) {
 
 		err := securenet.ValidateURL(ctx, "https://example.com/api",
 			securenet.WithResolver(testResolver))
-		assert.NoError(t, err)
+		if err != nil {
+			t.Errorf("期待しないエラーが発生しました: %v", err)
+		}
 	})
 
 	t.Run("不正なCIDR表記は無視されること", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "https://internal.test/api",
 			securenet.WithResolver(testResolver),
 			securenet.WithAllowedCIDRs("not-a-cidr", "10.0.0.0/8"))
-		assert.NoError(t, err)
+		if err != nil {
+			t.Errorf("期待しないエラーが発生しました: %v", err)
+		}
 	})
 
 	t.Run("WithAllowLinkLocal でメタデータエンドポイントが許可されること", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "http://169.254.169.254/latest/meta-data/",
 			securenet.WithResolver(testResolver), securenet.WithAllowLinkLocal())
-		assert.NoError(t, err)
+		if err != nil {
+			t.Errorf("期待しないエラーが発生しました: %v", err)
+		}
 	})
 }
 
@@ -303,10 +355,18 @@ func TestNewSafeHTTPClient(t *testing.T) {
 		timeout := 10 * time.Second
 		client := securenet.NewSafeHTTPClient(timeout)
 
-		require.NotNil(t, client)
-		assert.Equal(t, timeout, client.Timeout)
-		assert.NotNil(t, client.Transport)
-		assert.NotNil(t, client.CheckRedirect)
+		if client == nil {
+			t.Fatal("client が nil です")
+		}
+		if client.Timeout != timeout {
+			t.Errorf("client.Timeout が不正です: 期待 %v, 実績 %v", timeout, client.Timeout)
+		}
+		if client.Transport == nil {
+			t.Error("client.Transport が nil です")
+		}
+		if client.CheckRedirect == nil {
+			t.Error("client.CheckRedirect が nil です")
+		}
 	})
 
 	t.Run("ProxyFromEnvironmentDisabled", func(t *testing.T) {
@@ -315,17 +375,23 @@ func TestNewSafeHTTPClient(t *testing.T) {
 
 		client := securenet.NewSafeHTTPClient(2 * time.Second)
 		transport, ok := client.Transport.(*http.Transport)
-
-		require.True(t, ok)
-		assert.Nil(t, transport.Proxy)
+		if !ok {
+			t.Fatalf("Transport が *http.Transport ではありません: %T", client.Transport)
+		}
+		if transport.Proxy != nil {
+			t.Error("環境変数のプロキシは既定で無効であるべきです")
+		}
 	})
 
 	t.Run("WithProxyFromEnvironment で明示的に有効化できること", func(t *testing.T) {
 		client := securenet.NewSafeHTTPClient(2*time.Second, securenet.WithProxyFromEnvironment())
 		transport, ok := client.Transport.(*http.Transport)
-
-		require.True(t, ok)
-		assert.NotNil(t, transport.Proxy)
+		if !ok {
+			t.Fatalf("Transport が *http.Transport ではありません: %T", client.Transport)
+		}
+		if transport.Proxy == nil {
+			t.Error("Proxy が設定されていません")
+		}
 	})
 
 	t.Run("BlockLoopbackConnection", func(t *testing.T) {
@@ -338,8 +404,12 @@ func TestNewSafeHTTPClient(t *testing.T) {
 		client := securenet.NewSafeHTTPClient(2 * time.Second)
 		_, err := client.Get(server.URL)
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, securenet.ErrRestrictedIP)
+		if err == nil {
+			t.Fatal("エラーを期待していましたが nil でした")
+		}
+		if !errors.Is(err, securenet.ErrRestrictedIP) {
+			t.Errorf("securenet.ErrRestrictedIP を期待していましたが、異なります: %v", err)
+		}
 	})
 
 	t.Run("WithAllowLoopback でローカルサーバに接続できること", func(t *testing.T) {
@@ -351,17 +421,25 @@ func TestNewSafeHTTPClient(t *testing.T) {
 		client := securenet.NewSafeHTTPClient(2*time.Second, securenet.WithAllowLoopback())
 		resp, err := client.Get(server.URL)
 
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("期待しないエラーが発生しました: %v", err)
+		}
 		defer func() { _ = resp.Body.Close() }()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("resp.StatusCode が不正です: 期待 %v, 実績 %v", http.StatusOK, resp.StatusCode)
+		}
 	})
 
 	t.Run("BlockPrivateIPDirectly", func(t *testing.T) {
 		client := securenet.NewSafeHTTPClient(2 * time.Second)
 		_, err := client.Get("http://192.168.10.254/test")
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, securenet.ErrRestrictedIP)
+		if err == nil {
+			t.Fatal("エラーを期待していましたが nil でした")
+		}
+		if !errors.Is(err, securenet.ErrRestrictedIP) {
+			t.Errorf("securenet.ErrRestrictedIP を期待していましたが、異なります: %v", err)
+		}
 	})
 
 	t.Run("BlockRebindingResolver", func(t *testing.T) {
@@ -371,8 +449,12 @@ func TestNewSafeHTTPClient(t *testing.T) {
 
 		_, err := client.Get("http://rebind.test/")
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, securenet.ErrRestrictedIP)
+		if err == nil {
+			t.Fatal("エラーを期待していましたが nil でした")
+		}
+		if !errors.Is(err, securenet.ErrRestrictedIP) {
+			t.Errorf("securenet.ErrRestrictedIP を期待していましたが、異なります: %v", err)
+		}
 	})
 
 	t.Run("ContextTimeout", func(t *testing.T) {
@@ -383,11 +465,17 @@ func TestNewSafeHTTPClient(t *testing.T) {
 		cancel()
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://example.com", nil)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("期待しないエラーが発生しました: %v", err)
+		}
 
 		_, err = client.Do(req)
-		require.Error(t, err)
-		assert.ErrorIs(t, err, context.Canceled)
+		if err == nil {
+			t.Fatal("エラーを期待していましたが nil でした")
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("context.Canceled を期待していましたが、異なります: %v", err)
+		}
 	})
 }
 
@@ -395,9 +483,15 @@ func TestNewSafeTransport(t *testing.T) {
 	t.Run("Transport 単体を取得できること", func(t *testing.T) {
 		transport := securenet.NewSafeTransport(2*time.Second, securenet.WithAllowLoopback())
 
-		require.NotNil(t, transport)
-		assert.Nil(t, transport.Proxy)
-		assert.NotNil(t, transport.DialContext)
+		if transport == nil {
+			t.Fatal("transport が nil です")
+		}
+		if transport.Proxy != nil {
+			t.Error("transport.Proxy は nil であるべきです")
+		}
+		if transport.DialContext == nil {
+			t.Error("transport.DialContext が nil です")
+		}
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusTeapot)
@@ -407,9 +501,13 @@ func TestNewSafeTransport(t *testing.T) {
 		client := &http.Client{Transport: transport, Timeout: 2 * time.Second}
 		resp, err := client.Get(server.URL)
 
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("期待しないエラーが発生しました: %v", err)
+		}
 		defer func() { _ = resp.Body.Close() }()
-		assert.Equal(t, http.StatusTeapot, resp.StatusCode)
+		if resp.StatusCode != http.StatusTeapot {
+			t.Errorf("resp.StatusCode が不正です: 期待 %v, 実績 %v", http.StatusTeapot, resp.StatusCode)
+		}
 	})
 
 	t.Run("WithBaseTransport の設定が引き継がれること", func(t *testing.T) {
@@ -419,11 +517,19 @@ func TestNewSafeTransport(t *testing.T) {
 
 		transport := securenet.NewSafeTransport(time.Second, securenet.WithBaseTransport(base))
 
-		assert.Equal(t, 42, transport.MaxIdleConnsPerHost)
-		assert.True(t, transport.DisableCompression)
+		if transport.MaxIdleConnsPerHost != 42 {
+			t.Errorf("transport.MaxIdleConnsPerHost が不正です: 期待 %v, 実績 %v", 42, transport.MaxIdleConnsPerHost)
+		}
+		if !transport.DisableCompression {
+			t.Error("transport.DisableCompression が false です")
+		}
 		// Proxy と DialContext は securenet 側で上書きされる
-		assert.Nil(t, transport.Proxy)
-		assert.NotNil(t, transport.DialContext)
+		if transport.Proxy != nil {
+			t.Error("transport.Proxy は nil であるべきです")
+		}
+		if transport.DialContext == nil {
+			t.Error("transport.DialContext が nil です")
+		}
 	})
 
 	t.Run("WithBaseTransport の DialTLSContext は無効化されること", func(t *testing.T) {
@@ -438,10 +544,18 @@ func TestNewSafeTransport(t *testing.T) {
 
 		transport := securenet.NewSafeTransport(time.Second, securenet.WithBaseTransport(base))
 
-		assert.Nil(t, transport.DialTLSContext)
-		assert.Nil(t, transport.DialTLS)
-		assert.Nil(t, transport.Dial)
-		assert.NotNil(t, transport.DialContext)
+		if transport.DialTLSContext != nil {
+			t.Error("transport.DialTLSContext は nil であるべきです")
+		}
+		if transport.DialTLS != nil {
+			t.Error("transport.DialTLS は nil であるべきです")
+		}
+		if transport.Dial != nil {
+			t.Error("transport.Dial は nil であるべきです")
+		}
+		if transport.DialContext == nil {
+			t.Error("transport.DialContext が nil です")
+		}
 	})
 
 	t.Run("http.DefaultTransport が差し替えられていても panic しないこと", func(t *testing.T) {
@@ -450,11 +564,14 @@ func TestNewSafeTransport(t *testing.T) {
 		http.DefaultTransport = stubRoundTripper{}
 		defer func() { http.DefaultTransport = orig }()
 
-		require.NotPanics(t, func() {
-			transport := securenet.NewSafeTransport(time.Second)
-			assert.NotNil(t, transport.DialContext)
-			assert.Nil(t, transport.Proxy)
-		})
+		// panic した場合はテスト自体が失敗するため、追加のアサーションは不要。
+		transport := securenet.NewSafeTransport(time.Second)
+		if transport.DialContext == nil {
+			t.Error("DialContext が設定されていません")
+		}
+		if transport.Proxy != nil {
+			t.Error("Proxy は nil であるべきです")
+		}
 	})
 
 	t.Run("WithDialer が使用されること", func(t *testing.T) {
@@ -478,17 +595,23 @@ func TestNewSafeTransport(t *testing.T) {
 			Timeout: 2 * time.Second,
 		}
 		resp, err := client.Get(server.URL)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("期待しないエラーが発生しました: %v", err)
+		}
 		defer func() { _ = resp.Body.Close() }()
 
-		assert.True(t, called, "WithDialer で渡した Dialer が使われていません")
+		if !called {
+			t.Error("WithDialer で渡した Dialer が使われていません")
+		}
 	})
 }
 
 func TestCheckRedirect(t *testing.T) {
 	newReq := func(rawURL string) *http.Request {
 		req, err := http.NewRequest(http.MethodGet, rawURL, nil)
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("期待しないエラーが発生しました: %v", err)
+		}
 		return req
 	}
 
@@ -498,8 +621,12 @@ func TestCheckRedirect(t *testing.T) {
 		err := client.CheckRedirect(newReq("http://example.com/next"),
 			[]*http.Request{newReq("https://example.com/")})
 
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "downgrade")
+		if err == nil {
+			t.Fatal("エラーを期待していましたが nil でした")
+		}
+		if !strings.Contains(err.Error(), "downgrade") {
+			t.Errorf("エラーメッセージに downgrade が含まれていません: %v", err)
+		}
 	})
 
 	t.Run("WithAllowRedirectDowngrade で許可できること", func(t *testing.T) {
@@ -508,7 +635,9 @@ func TestCheckRedirect(t *testing.T) {
 		err := client.CheckRedirect(newReq("http://example.com/next"),
 			[]*http.Request{newReq("https://example.com/")})
 
-		assert.NoError(t, err)
+		if err != nil {
+			t.Errorf("期待しないエラーが発生しました: %v", err)
+		}
 	})
 
 	t.Run("同一スキームのリダイレクトは許可されること", func(t *testing.T) {
@@ -517,7 +646,9 @@ func TestCheckRedirect(t *testing.T) {
 		err := client.CheckRedirect(newReq("https://other.example/next"),
 			[]*http.Request{newReq("https://example.com/")})
 
-		assert.NoError(t, err)
+		if err != nil {
+			t.Errorf("期待しないエラーが発生しました: %v", err)
+		}
 	})
 
 	t.Run("最大リダイレクト回数を超えると停止すること", func(t *testing.T) {
@@ -529,8 +660,12 @@ func TestCheckRedirect(t *testing.T) {
 		}
 
 		err := client.CheckRedirect(newReq("https://example.com/next"), via)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "stopped after 10 redirects")
+		if err == nil {
+			t.Fatal("エラーを期待していましたが nil でした")
+		}
+		if !strings.Contains(err.Error(), "stopped after 10 redirects") {
+			t.Errorf("エラーメッセージに stopped after 10 redirects が含まれていません: %v", err)
+		}
 	})
 
 	t.Run("WithMaxRedirects(0) でリダイレクトを禁止できること", func(t *testing.T) {
@@ -539,8 +674,12 @@ func TestCheckRedirect(t *testing.T) {
 		err := client.CheckRedirect(newReq("https://example.com/next"),
 			[]*http.Request{newReq("https://example.com/")})
 
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "stopped after 0 redirects")
+		if err == nil {
+			t.Fatal("エラーを期待していましたが nil でした")
+		}
+		if !strings.Contains(err.Error(), "stopped after 0 redirects") {
+			t.Errorf("エラーメッセージに stopped after 0 redirects が含まれていません: %v", err)
+		}
 	})
 
 	t.Run("実際のリダイレクトを追従できること", func(t *testing.T) {
@@ -557,34 +696,52 @@ func TestCheckRedirect(t *testing.T) {
 		client := securenet.NewSafeHTTPClient(2*time.Second, securenet.WithAllowLoopback())
 		resp, err := client.Get(entry.URL)
 
-		require.NoError(t, err)
+		if err != nil {
+			t.Fatalf("期待しないエラーが発生しました: %v", err)
+		}
 		defer func() { _ = resp.Body.Close() }()
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("resp.StatusCode が不正です: 期待 %v, 実績 %v", http.StatusOK, resp.StatusCode)
+		}
 	})
 }
 
 func TestErrorMessages(t *testing.T) {
 	t.Run("BlockedIPError", func(t *testing.T) {
 		err := &securenet.BlockedIPError{Host: "evil.test", Addr: netip.MustParseAddr("10.0.0.1")}
-		assert.Contains(t, err.Error(), "evil.test")
-		assert.Contains(t, err.Error(), "10.0.0.1")
+		if !strings.Contains(err.Error(), "evil.test") {
+			t.Errorf("エラーメッセージに evil.test が含まれていません: %v", err)
+		}
+		if !strings.Contains(err.Error(), "10.0.0.1") {
+			t.Errorf("エラーメッセージに 10.0.0.1 が含まれていません: %v", err)
+		}
 	})
 
 	t.Run("SchemeError", func(t *testing.T) {
 		err := &securenet.SchemeError{Scheme: "ftp"}
-		assert.Contains(t, err.Error(), "ftp")
+		if !strings.Contains(err.Error(), "ftp") {
+			t.Errorf("エラーメッセージに ftp が含まれていません: %v", err)
+		}
 	})
 
 	t.Run("URLError_NilCause", func(t *testing.T) {
 		err := &securenet.URLError{URL: "bad"}
-		assert.Contains(t, err.Error(), "bad")
-		assert.ErrorIs(t, err, securenet.ErrInvalidURL)
+		if !strings.Contains(err.Error(), "bad") {
+			t.Errorf("エラーメッセージに bad が含まれていません: %v", err)
+		}
+		if !errors.Is(err, securenet.ErrInvalidURL) {
+			t.Errorf("securenet.ErrInvalidURL を期待していましたが、異なります: %v", err)
+		}
 	})
 
 	t.Run("ResolveError", func(t *testing.T) {
 		inner := errors.New("timeout")
 		err := &securenet.ResolveError{Host: "slow.test", Err: inner}
-		assert.Contains(t, err.Error(), "slow.test")
-		assert.ErrorIs(t, err, inner)
+		if !strings.Contains(err.Error(), "slow.test") {
+			t.Errorf("エラーメッセージに slow.test が含まれていません: %v", err)
+		}
+		if !errors.Is(err, inner) {
+			t.Errorf("inner を期待していましたが、異なります: %v", err)
+		}
 	})
 }
