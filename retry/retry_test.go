@@ -118,8 +118,8 @@ func TestRun(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("context.Canceled を期待していましたが、異なります: %v", err)
 		}
-		// backoff v5 はコンテキスト終了時に操作エラーを捨てるため、
-		// *Error 側で保持できていることを確認する。
+		// 打ち切り理由と最後の操作エラーの両方を *Error 側で
+		// 保持できていることを確認する。
 		if !errors.Is(err, opErr) {
 			t.Errorf("最後の操作エラーが失われています: %v", err)
 		}
@@ -256,9 +256,10 @@ func TestRun(t *testing.T) {
 	t.Run("WithMaxElapsedTime で経過時間により打ち切られること", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			calls := 0
-			_ = retry.Run(ctx, func() error {
+			opErr := errors.New("boom")
+			err := retry.Run(ctx, func() error {
 				calls++
-				return errors.New("boom")
+				return opErr
 			},
 				retry.WithMaxRetries(1000),
 				retry.WithInitialInterval(20*time.Millisecond),
@@ -271,6 +272,16 @@ func TestRun(t *testing.T) {
 			// 次は 60ms で MaxElapsedTime(50ms) を越えるため 3 回で止まる。
 			if calls != 3 {
 				t.Errorf("経過時間で打ち切られていません: %d 回実行されました, want 3", calls)
+			}
+			// 経過時間による打ち切りも「打ち切り」として ErrExhausted に分類する。
+			if !errors.Is(err, retry.ErrExhausted) {
+				t.Errorf("ErrExhausted を期待していましたが、異なります: %v", err)
+			}
+			if !errors.Is(err, opErr) {
+				t.Errorf("最後の操作エラーが失われています: %v", err)
+			}
+			if errors.Is(err, retry.ErrPermanent) {
+				t.Errorf("ErrPermanent になってはいけません: %v", err)
 			}
 		})
 	})

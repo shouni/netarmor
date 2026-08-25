@@ -29,7 +29,7 @@ go test ./securenet -run '^$' -fuzz FuzzIsSecureServiceURL -fuzztime 30s
 golangci-lint run
 ```
 
-CI (`.github/workflows/ci.yml`) also runs `govulncheck` and uploads a coverage profile. Go version comes from `go.mod` (currently 1.26 — `errors.AsType`, `slices`, and `net/netip` are all fair game).
+CI (`.github/workflows/ci.yml`) also runs `govulncheck` and uploads a coverage profile. Go version comes from `go.mod` (currently 1.27 — `errors.AsType`, `slices`, and `net/netip` are all fair game).
 
 ## Architecture
 
@@ -56,17 +56,17 @@ Key invariants to preserve:
 
 Three files: `retry.go` (`Run`/`RunValue`), `options.go` (`settings`, all `With*` options, defaults), `errors.go` (`*Error` + sentinels).
 
-Built on `cenkalti/backoff/v5`, whose API differs from v4 in ways that matter here:
+Built on `cenkalti/backoff/v7`, whose API has details that matter here:
 
 - `backoff.WithMaxTries(n)` counts **total attempts**, not retries — hence `addSaturating(s.maxRetries, 1)`.
 - `MaxElapsedTime` defaults to 15 minutes upstream, so `WithMaxElapsedTime(s.maxElapsedTime)` is always passed (default 0 = disabled). Retries are bounded by count and context only.
-- On context cancellation `backoff.Retry` returns `context.Cause(ctx)` and **discards the operation's last error**. `RunValue` therefore tracks `lastErr` in the closure and stores both in `*Error`. Removing that closure state silently loses the failure cause.
+- `backoff.Retry` returns a `*backoff.RetryError` on **every** failure, carrying both `LastErr` (the last operation error) and `Cause` (why it stopped: `ErrPermanent` / `ErrExhausted` / `ErrMaxElapsedTime` / the context cause). `newError` is the single place that maps that onto `*Error` — don't reintroduce closure-tracked `lastErr`/`permanent` state, the upstream error is now the source of truth.
 
 `Run` delegates to `RunValue[struct{}]` — keep the logic in one place.
 
-Retry-After support: an operation error whose chain implements `DelayHinter` (`RetryAfter() time.Duration`, detected with `errors.As`) overrides the next backoff interval. The closure joins the op error with `*backoff.RetryAfterError` via `errors.Join`; backoff then uses that duration and resets its schedule. Because the joined error is an internal representation, the notify adapter passes `lastErr` (the original op error) to the hook, and `*Error.Err` stays the original too. `ShouldRetryFunc` returning false takes precedence over any hint.
+Retry-After support: an operation error whose chain implements `DelayHinter` (`RetryAfter() time.Duration`, detected with `errors.As` — `errors.AsType` can't be used, `DelayHinter` doesn't embed `error`) overrides the next backoff interval. The closure returns `backoff.RetryAfter(d, err)`; backoff waits that duration, resets its schedule, and keeps `err` as the `RetryError.LastErr` should retrying later stop. The hook still needs the unwrapped original, since `WithNotify` is handed the `*backoff.RetryAfterError` itself — that's what `unwrapRetryAfter` is for. `ShouldRetryFunc` returning false takes precedence over any hint.
 
-`*Error` implements multi-error `Unwrap() []error`, so `errors.Is` matches the operation error, the context cause, *and* exactly one of `ErrPermanent` / `ErrExhausted`. The `Permanent` flag drives that classification; it's set in the closure when `shouldRetry` returns false.
+`*Error` implements multi-error `Unwrap() []error`, so `errors.Is` matches the operation error, the context cause, *and* exactly one of `ErrPermanent` / `ErrExhausted`. The `Permanent` flag drives that classification; `newError` sets it from `RetryError.Cause`. `Error.Cause` holds *only* context causes — `ErrMaxElapsedTime` is deliberately folded into `ErrExhausted` (as it was under v5, where it surfaced as a discarded `context.DeadlineExceeded`) so the package's own sentinels stay the whole classification surface.
 
 ## Conventions
 
