@@ -4,8 +4,8 @@
 
 | バージョン | サポート状況 |
 | --- | --- |
-| v1.2.x | ✅ サポート中 |
-| v1.1.x 以前 | ❌ 非サポート |
+| v1.3.x | ✅ サポート中 |
+| v1.2.x 以前 | ❌ 非サポート |
 
 ## 脆弱性の報告 (Reporting a Vulnerability)
 
@@ -31,13 +31,14 @@ GitHub の [Private vulnerability reporting](https://github.com/shouni/netarmor/
 - **DNS Rebinding (TOCTOU)**: 検証後・接続前に DNS 応答が差し替えられる攻撃。`NewSafeHTTPClient` および `NewSafeTransport` は接続直前に名前解決を行い、**検証済みの IP アドレスに対して直接ダイヤル**することで防ぎます
 - **IPv4-mapped IPv6 による回避**: `::ffff:127.0.0.1` のような表記は `netip.Addr.Unmap()` で正規化してから判定します
 - **プロキシ経由の迂回**: 環境変数 `HTTP_PROXY` / `HTTPS_PROXY` は既定で無効です
-- **リダイレクトによるダウングレード**: https から http へのリダイレクトは既定で拒否されます
+- **リダイレクトによるダウングレード**: `NewSafeHTTPClient` が返すクライアントでは、https から http へのリダイレクトを既定で拒否します
 
 ### 防御対象外 (Out of Scope)
 
 以下は本パッケージの責務ではありません。利用側での対策が必要です。
 
 - **`ValidateURL` 単体での使用**: 静的検証のみでは DNS Rebinding を防げません。必ず `NewSafeHTTPClient` / `NewSafeTransport` と併用してください
+- **`NewSafeTransport` 単体使用時のリダイレクト**: リダイレクトポリシー (`WithMaxRedirects` / `WithAllowRedirectDowngrade`) は `*http.Client.CheckRedirect` の機能であり、Transport には含まれません。自前で `*http.Client` を組む場合、これらのオプションは無視され Go 既定の挙動（10 回まで追従・ダウングレード制限なし）になります。IP 検証は Transport 側なので引き続き有効です
 - **`WithProxy` 有効時の最終宛先**: 接続先はプロキシサーバになるため、最終的な宛先 IP は検証されません
 - **`WithAllowLoopback` / `WithAllowPrivate` / `WithAllowLinkLocal` 有効時**: 明示的にポリシーを緩めた場合の結果は利用側の責任です
 - **レスポンスボディのサイズ・内容**: 展開爆弾やレスポンス内容の検証は行いません

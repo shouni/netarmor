@@ -107,6 +107,12 @@ func ValidateURL(ctx context.Context, rawURL string, opts ...Option) error {
 //
 // 独自の *http.Client（cookiejar や計装付き）を構築したい場合に使用してください。
 // 単に安全なクライアントが欲しい場合は NewSafeHTTPClient を使用します。
+//
+// リダイレクトポリシー (WithMaxRedirects / WithAllowRedirectDowngrade) は
+// *http.Client.CheckRedirect 側の機能のため、返される Transport には含まれません。
+// 自前で *http.Client を組むとこれらのオプションは無視され、Go 既定の挙動
+// （10 回まで追従し、https から http へのダウングレードも制限しない）になります。
+// リダイレクトの制御が必要な場合は NewSafeHTTPClient を使用してください。
 func NewSafeTransport(timeout time.Duration, opts ...Option) *http.Transport {
 	return newOptions(opts).newTransport(timeout)
 }
