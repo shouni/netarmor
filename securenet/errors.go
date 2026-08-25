@@ -27,6 +27,12 @@ var (
 
 	// ErrInvalidURL は、URL のパースに失敗したことを示します。
 	ErrInvalidURL = errors.New("securenet: invalid URL")
+
+	// ErrTooManyRedirects は、リダイレクトの追従回数が上限に達したことを示します。
+	ErrTooManyRedirects = errors.New("securenet: too many redirects")
+
+	// ErrRedirectDowngrade は、https から http へのリダイレクトを拒否したことを示します。
+	ErrRedirectDowngrade = errors.New("securenet: redirect downgrade")
 )
 
 // BlockedIPError は、制限されたネットワークへの接続が遮断されたことを表します。
@@ -99,3 +105,34 @@ func (e *URLError) Unwrap() []error {
 	}
 	return []error{ErrInvalidURL, e.Err}
 }
+
+// TooManyRedirectsError は、リダイレクトの追従を上限で打ち切ったことを表します。
+// errors.Is(err, ErrTooManyRedirects) が true になります。
+//
+// このエラーは *http.Client の CheckRedirect から返るため、呼び出し側には
+// *url.Error に包まれて届きます。errors.Is / errors.As はその包みを透過します。
+type TooManyRedirectsError struct {
+	// Max は設定されていた追従回数の上限です。
+	Max int
+}
+
+func (e *TooManyRedirectsError) Error() string {
+	return fmt.Sprintf("securenet: stopped after %d redirects", e.Max)
+}
+
+// Unwrap は ErrTooManyRedirects を返し、errors.Is による分類を可能にします。
+func (e *TooManyRedirectsError) Unwrap() error { return ErrTooManyRedirects }
+
+// RedirectDowngradeError は、https から http へのリダイレクト追従を拒否したことを表します。
+// errors.Is(err, ErrRedirectDowngrade) が true になります。
+type RedirectDowngradeError struct {
+	// URL はリダイレクト先です。認証情報は伏せ字にした表現を保持します。
+	URL string
+}
+
+func (e *RedirectDowngradeError) Error() string {
+	return fmt.Sprintf("securenet: refusing redirect downgrade from https to http (%s)", e.URL)
+}
+
+// Unwrap は ErrRedirectDowngrade を返し、errors.Is による分類を可能にします。
+func (e *RedirectDowngradeError) Unwrap() error { return ErrRedirectDowngrade }

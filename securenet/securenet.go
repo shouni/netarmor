@@ -205,14 +205,15 @@ func (o *options) dialContext(dialer *net.Dialer) func(context.Context, string, 
 }
 
 // checkRedirect はリダイレクト追従の可否を判定します。
+// 返すエラーは errors.Is で ErrTooManyRedirects / ErrRedirectDowngrade と比較できます。
 func (o *options) checkRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) > o.maxRedirects {
-		return fmt.Errorf("securenet: stopped after %d redirects", o.maxRedirects)
+		return &TooManyRedirectsError{Max: o.maxRedirects}
 	}
 	if !o.allowDowngrade && len(via) > 0 {
 		prev := via[len(via)-1]
 		if prev.URL.Scheme == SchemeHTTPS && req.URL.Scheme == SchemeHTTP {
-			return fmt.Errorf("securenet: refusing redirect downgrade from https to http (%s)", req.URL.Redacted())
+			return &RedirectDowngradeError{URL: req.URL.Redacted()}
 		}
 	}
 	return nil

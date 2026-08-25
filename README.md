@@ -119,6 +119,15 @@ client := securenet.NewSafeHTTPClient(2*time.Second,
 | `WithBaseTransport` / `WithDialer` | Transport / Dialer の持ち込み |
 | `WithMaxRedirects` / `WithAllowRedirectDowngrade` | リダイレクトポリシー |
 
+リダイレクトで失敗した場合も型で判別できます。`http.Client` が返す `*url.Error` の包みは `errors.Is` / `errors.As` が透過します。
+
+```go
+switch {
+case errors.Is(err, securenet.ErrTooManyRedirects):  // 追従回数の上限に到達
+case errors.Is(err, securenet.ErrRedirectDowngrade): // https から http へのダウングレード
+}
+```
+
 ### 4. 指数バックオフリトライ (`retry`)
 
 一時的な接続エラーに対し、適切な待機時間を挟みながら自動的にリトライを行います。

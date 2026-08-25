@@ -265,6 +265,9 @@ func WithDialer(d *net.Dialer) Option {
 
 // WithMaxRedirects は追従するリダイレクトの最大回数を設定します。
 // 0 を指定するとリダイレクトを一切追従しません。負値は既定値 (10) として扱われます。
+//
+// 上限に達した場合、リクエストは *TooManyRedirectsError で失敗します
+// (errors.Is(err, ErrTooManyRedirects) が true)。
 func WithMaxRedirects(n int) Option {
 	return func(o *options) {
 		if n >= 0 {
@@ -274,7 +277,9 @@ func WithMaxRedirects(n int) Option {
 }
 
 // WithAllowRedirectDowngrade は https から http へのリダイレクト追従を許可します。
-// 既定ではダウングレードを伴うリダイレクトは拒否されます。
+//
+// 既定ではダウングレードを伴うリダイレクトは *RedirectDowngradeError で拒否されます
+// (errors.Is(err, ErrRedirectDowngrade) が true)。
 func WithAllowRedirectDowngrade() Option {
 	return func(o *options) { o.allowDowngrade = true }
 }

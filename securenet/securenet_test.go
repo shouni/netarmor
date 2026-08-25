@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"strings"
 	"syscall"
 	"testing"
@@ -624,8 +625,15 @@ func TestCheckRedirect(t *testing.T) {
 		if err == nil {
 			t.Fatal("エラーを期待していましたが nil でした")
 		}
-		if !strings.Contains(err.Error(), "downgrade") {
-			t.Errorf("エラーメッセージに downgrade が含まれていません: %v", err)
+		if !errors.Is(err, securenet.ErrRedirectDowngrade) {
+			t.Errorf("ErrRedirectDowngrade を期待していましたが、異なります: %v", err)
+		}
+		dg, ok := errors.AsType[*securenet.RedirectDowngradeError](err)
+		if !ok {
+			t.Fatalf("*RedirectDowngradeError を期待していましたが、異なります: %v", err)
+		}
+		if dg.URL != "http://example.com/next" {
+			t.Errorf("dg.URL が不正です: 期待 %v, 実績 %v", "http://example.com/next", dg.URL)
 		}
 	})
 
@@ -663,8 +671,12 @@ func TestCheckRedirect(t *testing.T) {
 		if err == nil {
 			t.Fatal("エラーを期待していましたが nil でした")
 		}
-		if !strings.Contains(err.Error(), "stopped after 10 redirects") {
-			t.Errorf("エラーメッセージに stopped after 10 redirects が含まれていません: %v", err)
+		tm, ok := errors.AsType[*securenet.TooManyRedirectsError](err)
+		if !ok {
+			t.Fatalf("*TooManyRedirectsError を期待していましたが、異なります: %v", err)
+		}
+		if tm.Max != 10 {
+			t.Errorf("tm.Max が不正です: 期待 10, 実績 %d", tm.Max)
 		}
 	})
 
@@ -677,8 +689,40 @@ func TestCheckRedirect(t *testing.T) {
 		if err == nil {
 			t.Fatal("エラーを期待していましたが nil でした")
 		}
-		if !strings.Contains(err.Error(), "stopped after 0 redirects") {
-			t.Errorf("エラーメッセージに stopped after 0 redirects が含まれていません: %v", err)
+		if !errors.Is(err, securenet.ErrTooManyRedirects) {
+			t.Errorf("ErrTooManyRedirects を期待していましたが、異なります: %v", err)
+		}
+	})
+
+	t.Run("クライアント経由でも url.Error 越しに分類できること", func(t *testing.T) {
+		// http.Client は CheckRedirect のエラーを *url.Error に包んで返す。
+		// errors.Is / errors.As がその包みを透過することを確認する。
+		var loop *httptest.Server
+		loop = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, loop.URL+"/again", http.StatusFound)
+		}))
+		defer loop.Close()
+
+		client := securenet.NewSafeHTTPClient(2*time.Second,
+			securenet.WithAllowLoopback(), securenet.WithMaxRedirects(2))
+
+		_, err := client.Get(loop.URL)
+		if err == nil {
+			t.Fatal("エラーを期待していましたが nil でした")
+		}
+		var ue *url.Error
+		if !errors.As(err, &ue) {
+			t.Fatalf("*url.Error に包まれていません: %v", err)
+		}
+		if !errors.Is(err, securenet.ErrTooManyRedirects) {
+			t.Errorf("ErrTooManyRedirects を期待していましたが、異なります: %v", err)
+		}
+		tm, ok := errors.AsType[*securenet.TooManyRedirectsError](err)
+		if !ok {
+			t.Fatalf("*TooManyRedirectsError を期待していましたが、異なります: %v", err)
+		}
+		if tm.Max != 2 {
+			t.Errorf("tm.Max が不正です: 期待 2, 実績 %d", tm.Max)
 		}
 	})
 
@@ -731,6 +775,26 @@ func TestErrorMessages(t *testing.T) {
 		}
 		if !errors.Is(err, securenet.ErrInvalidURL) {
 			t.Errorf("securenet.ErrInvalidURL を期待していましたが、異なります: %v", err)
+		}
+	})
+
+	t.Run("TooManyRedirectsError", func(t *testing.T) {
+		err := &securenet.TooManyRedirectsError{Max: 7}
+		if !strings.Contains(err.Error(), "7") {
+			t.Errorf("エラーメッセージに 7 が含まれていません: %v", err)
+		}
+		if !errors.Is(err, securenet.ErrTooManyRedirects) {
+			t.Errorf("ErrTooManyRedirects を期待していましたが、異なります: %v", err)
+		}
+	})
+
+	t.Run("RedirectDowngradeError", func(t *testing.T) {
+		err := &securenet.RedirectDowngradeError{URL: "http://example.com/next"}
+		if !strings.Contains(err.Error(), "example.com") {
+			t.Errorf("エラーメッセージに example.com が含まれていません: %v", err)
+		}
+		if !errors.Is(err, securenet.ErrRedirectDowngrade) {
+			t.Errorf("ErrRedirectDowngrade を期待していましたが、異なります: %v", err)
 		}
 	})
 
