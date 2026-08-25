@@ -134,20 +134,52 @@ func NewSafeHTTPClient(timeout time.Duration, opts ...Option) *http.Client {
 
 // newTransport は options から検証付き Transport を生成します。
 func (o *options) newTransport(timeout time.Duration) *http.Transport {
-	base := o.baseTransport
-	if base == nil {
-		base = http.DefaultTransport.(*http.Transport)
-	}
-
-	transport := base.Clone()
+	transport := o.cloneBaseTransport()
 	transport.Proxy = o.proxy
 	transport.DialContext = o.dialContext(o.newDialer(timeout))
+
+	// DialTLSContext が設定されていると、HTTPS では DialContext が呼ばれず
+	// IP 検証が丸ごと迂回される（net/http の仕様）。安全側に倒して無効化する。
+	// 非推奨の Dial / DialTLS も同じ理由で落とす。
+	transport.DialTLSContext = nil
+	transport.DialTLS = nil
+	transport.Dial = nil
+
 	return transport
+}
+
+// cloneBaseTransport は複製元の Transport を決定して複製します。
+func (o *options) cloneBaseTransport() *http.Transport {
+	if o.baseTransport != nil {
+		return o.baseTransport.Clone()
+	}
+	// http.DefaultTransport は計装ライブラリ等にグローバルで差し替えられている
+	// ことがある。型アサーションで panic しないよう、*http.Transport でなければ
+	// 標準と同等の既定値から組み立てる。
+	if dt, ok := http.DefaultTransport.(*http.Transport); ok {
+		return dt.Clone()
+	}
+	return &http.Transport{
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: time.Second,
+	}
 }
 
 // dialContext は、接続直前に名前解決と IP 検証を行うダイヤル関数を返します。
 func (o *options) dialContext(dialer *net.Dialer) func(context.Context, string, string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		// net.Dialer.Timeout は DialContext 1 回ごとに適用されるため、解決した
+		// アドレスごとに呼ぶと合計で「アドレス数 × timeout」まで伸びうる。
+		// 標準の net.Dialer と同じく、名前解決を含む 1 回のダイヤル全体を上限とする。
+		if dialer.Timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, dialer.Timeout)
+			defer cancel()
+		}
+
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
 			return nil, fmt.Errorf("securenet: split host port %q: %w", addr, err)

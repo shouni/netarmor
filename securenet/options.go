@@ -101,7 +101,9 @@ func (p *policy) isRestricted(addr netip.Addr) bool {
 		return !p.allowPrivate
 	case a.IsLinkLocalUnicast(), a.IsLinkLocalMulticast():
 		return !p.allowLinkLocal
-	case a.IsUnspecified(), a.IsMulticast(), a.IsInterfaceLocalMulticast():
+	// IsMulticast は IPv6 の ff00::/8 全体を含むため、インターフェースローカル
+	// マルチキャスト (ff01::/16) の判定は不要。
+	case a.IsUnspecified(), a.IsMulticast():
 		return true
 	}
 
@@ -240,8 +242,14 @@ func WithAllowLinkLocal() Option {
 }
 
 // WithBaseTransport は、複製元となる *http.Transport を指定します。
-// 指定した Transport は複製された上で Proxy と DialContext が上書きされます。
 // HTTP/2 設定やコネクションプールの調整を持ち込みたい場合に使用します。
+//
+// 指定した Transport は複製された上で、次のフィールドが securenet に上書きされます。
+//
+//   - Proxy / DialContext : 検証付きの実装に差し替えられます。
+//   - DialTLSContext / DialTLS / Dial : nil にされます。DialTLSContext が
+//     設定されていると HTTPS で DialContext が呼ばれず IP 検証が迂回されるため、
+//     本パッケージでは無効化します。TLS の設定は TLSClientConfig で行ってください。
 func WithBaseTransport(t *http.Transport) Option {
 	return func(o *options) { o.baseTransport = t }
 }

@@ -47,6 +47,8 @@ Two distinct layers that are meant to be used together; do not collapse them:
 Key invariants to preserve:
 
 - **`transport.Proxy` defaults to `nil`** so `HTTP_PROXY`/`HTTPS_PROXY` cannot route around the IP check. Only `WithProxy`/`WithProxyFromEnvironment` may set it. Note the trap documented on `WithProxy`: once a proxy is set, `DialContext` sees the *proxy's* address, so a private-IP proxy is itself blocked unless allowed via `WithAllowedCIDRs`.
+- **`newTransport` nils out `DialTLSContext` / `DialTLS` / `Dial` after cloning the base transport.** `net/http` prefers `DialTLSContext` over `DialContext` for HTTPS, so a base transport carrying one would bypass IP validation entirely. `cloneBaseTransport` also type-asserts `http.DefaultTransport` with comma-ok — instrumentation libraries replace it globally, and a bare assertion panics.
+- **The dial timeout bounds the whole `DialContext` call, not each address.** `net.Dialer.Timeout` applies per `DialContext` invocation, and the loop calls it once per resolved IP, so without the wrapping `context.WithTimeout` a 4-address host could take 4× the timeout. `NewSafeTransport` users have no `http.Client.Timeout` to catch that.
 - **`policy.isRestricted` calls `Unmap()` first.** Without it, `::ffff:127.0.0.1` bypasses the IPv4 predicates. Evaluation order is allowlist → stdlib predicates → blocked prefixes; the allowlist wins over everything.
 - **fail-closed on multi-address hosts**: one restricted IP rejects the whole connection. Never "pick the safe IP" — resolution order is attacker-influenced.
 - **`defaultOptions` wraps the shared prefix slice in `slices.Clip`** so `WithBlockedCIDRs`' `append` can't mutate the package-level backing array.
@@ -62,7 +64,7 @@ Built on `cenkalti/backoff/v7`, whose API has details that matter here:
 - `MaxElapsedTime` defaults to 15 minutes upstream, so `WithMaxElapsedTime(s.maxElapsedTime)` is always passed (default 0 = disabled). Retries are bounded by count and context only.
 - `backoff.Retry` returns a `*backoff.RetryError` on **every** failure, carrying both `LastErr` (the last operation error) and `Cause` (why it stopped: `ErrPermanent` / `ErrExhausted` / `ErrMaxElapsedTime` / the context cause). `newError` is the single place that maps that onto `*Error` — don't reintroduce closure-tracked `lastErr`/`permanent` state, the upstream error is now the source of truth.
 
-`Run` delegates to `RunValue[struct{}]` — keep the logic in one place.
+`Run` delegates to `RunValue[struct{}]`, and `RunCtx` / `RunValueCtx` (the variants whose *operation* takes a `ctx`) delegate down to the same place — keep the retry logic in `RunValue` only. `RunValueCtx` normalizes a nil `ctx` before capturing it, so the operation never receives nil.
 
 Retry-After support: an operation error whose chain implements `DelayHinter` (`RetryAfter() time.Duration`, detected with `errors.As` — `errors.AsType` can't be used, `DelayHinter` doesn't embed `error`) overrides the next backoff interval. The closure returns `backoff.RetryAfter(d, err)`; backoff waits that duration, resets its schedule, and keeps `err` as the `RetryError.LastErr` should retrying later stop. The hook still needs the unwrapped original, since `WithNotify` is handed the `*backoff.RetryAfterError` itself — that's what `unwrapRetryAfter` is for. `ShouldRetryFunc` returning false takes precedence over any hint.
 

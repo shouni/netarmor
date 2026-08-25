@@ -1,6 +1,9 @@
 package retry
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 const (
 	// DefaultMaxRetries は既定の最大リトライ回数です（初回実行を除く）。
@@ -18,6 +21,10 @@ const (
 
 // Operation はリトライ可能な処理を表す関数です。
 type Operation func() error
+
+// OperationCtx は、コンテキストを受け取るリトライ可能な処理を表す関数です。
+// RunCtx / RunValueCtx から、呼び出し側が渡した ctx がそのまま渡されます。
+type OperationCtx func(ctx context.Context) error
 
 // ShouldRetryFunc はエラーを受け取り、そのエラーがリトライ可能かどうかを判定します。
 // false を返すとリトライを打ち切り、Error.Permanent が true になります。

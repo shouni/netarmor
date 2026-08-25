@@ -18,6 +18,10 @@
 //	    retry.WithMaxRetries(3),
 //	)
 //
+// 操作にコンテキストを渡したい場合は RunCtx / RunValueCtx を使用します。
+//
+//	err := retry.RunCtx(ctx, func(ctx context.Context) error { return callAPI(ctx) })
+//
 // # 打ち切り条件
 //
 // リトライは「最大試行回数」と「コンテキストの終了」で打ち切られます。
@@ -57,6 +61,41 @@ func Run(ctx context.Context, op Operation, opts ...Option) error {
 		return struct{}{}, op()
 	}, opts...)
 	return err
+}
+
+// RunCtx は Run の、操作がコンテキストを受け取る版です。
+// 操作には呼び出し側が渡した ctx がそのまま渡されるため、クロージャで
+// ctx を捕捉する必要がありません。
+//
+//	err := retry.RunCtx(ctx, func(ctx context.Context) error {
+//	    return callAPI(ctx)
+//	}, retry.WithMaxRetries(5))
+//
+// ctx はリトライループを打ち切りますが、実行中の操作を中断するのは
+// 操作自身が ctx を監視している場合だけです。
+//
+// ctx が nil の場合は context.Background() として扱われ、操作にもそれが渡されます。
+func RunCtx(ctx context.Context, op OperationCtx, opts ...Option) error {
+	if op == nil {
+		return ErrNilOperation
+	}
+	_, err := RunValueCtx(ctx, func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, op(ctx)
+	}, opts...)
+	return err
+}
+
+// RunValueCtx は RunValue の、操作がコンテキストを受け取る版です。
+// 詳細は RunCtx を参照してください。
+func RunValueCtx[T any](ctx context.Context, op func(ctx context.Context) (T, error), opts ...Option) (T, error) {
+	var zero T
+	if op == nil {
+		return zero, ErrNilOperation
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return RunValue(ctx, func() (T, error) { return op(ctx) }, opts...)
 }
 
 // RunValue は Run の戻り値つき版です。操作が返した値をそのまま返します。

@@ -16,6 +16,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// stubRoundTripper は *http.Transport ではない http.DefaultTransport を再現します。
+type stubRoundTripper struct{}
+
+func (stubRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("stub round tripper")
+}
+
 // fakeResolver は実 DNS に依存せずに名前解決を再現するテスト用リゾルバです。
 // これによりテストはオフラインでも決定的に動作します。
 type fakeResolver map[string][]string
@@ -417,6 +424,37 @@ func TestNewSafeTransport(t *testing.T) {
 		// Proxy と DialContext は securenet 側で上書きされる
 		assert.Nil(t, transport.Proxy)
 		assert.NotNil(t, transport.DialContext)
+	})
+
+	t.Run("WithBaseTransport の DialTLSContext は無効化されること", func(t *testing.T) {
+		// DialTLSContext が生き残ると HTTPS で DialContext が呼ばれず、
+		// IP 検証が丸ごと迂回される。
+		base := &http.Transport{
+			DialTLSContext: func(context.Context, string, string) (net.Conn, error) {
+				t.Error("DialTLSContext は無効化されるべきです")
+				return nil, errors.New("must not be called")
+			},
+		}
+
+		transport := securenet.NewSafeTransport(time.Second, securenet.WithBaseTransport(base))
+
+		assert.Nil(t, transport.DialTLSContext)
+		assert.Nil(t, transport.DialTLS)
+		assert.Nil(t, transport.Dial)
+		assert.NotNil(t, transport.DialContext)
+	})
+
+	t.Run("http.DefaultTransport が差し替えられていても panic しないこと", func(t *testing.T) {
+		// 計装ライブラリ等がグローバルの DefaultTransport を差し替えることがある。
+		orig := http.DefaultTransport
+		http.DefaultTransport = stubRoundTripper{}
+		defer func() { http.DefaultTransport = orig }()
+
+		require.NotPanics(t, func() {
+			transport := securenet.NewSafeTransport(time.Second)
+			assert.NotNil(t, transport.DialContext)
+			assert.Nil(t, transport.Proxy)
+		})
 	})
 
 	t.Run("WithDialer が使用されること", func(t *testing.T) {

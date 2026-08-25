@@ -36,6 +36,29 @@ func ExampleRunValue() {
 	// Output: body="response body" err=<nil>
 }
 
+// 操作にコンテキストを渡したい場合は RunCtx を使用します。
+// 操作が ctx を監視していれば、実行中の試行も中断できます。
+func ExampleRunCtx() {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	attempts := 0
+	err := retry.RunCtx(ctx, func(ctx context.Context) error {
+		attempts++
+		if attempts < 2 {
+			return errors.New("temporary failure")
+		}
+		// ctx をそのまま下位の呼び出しへ渡せる。
+		return ctx.Err()
+	},
+		retry.WithName("ExternalAPI"),
+		retry.WithInitialInterval(time.Millisecond),
+	)
+
+	fmt.Printf("attempts=%d err=%v\n", attempts, err)
+	// Output: attempts=2 err=<nil>
+}
+
 var errServiceDown = errors.New("service down")
 
 // リトライ失敗時のエラーは errors.Is / errors.As で分類できます。
