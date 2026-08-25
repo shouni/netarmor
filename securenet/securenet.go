@@ -45,10 +45,13 @@ const (
 	SchemeHTTP = "http"
 	// SchemeHTTPS は暗号化されたHTTPSスキームを表します。
 	SchemeHTTPS = "https"
-	// SchemeGCS は Google Cloud Storage の URI スキームを表します。
-	SchemeGCS = "gs"
-	// SchemeS3 は Amazon S3 の URI スキームを表します。
-	SchemeS3 = "s3"
+)
+
+// クラウドストレージの URI スキーム。接続先は各 SDK が決めるため、
+// ValidateURL は名前解決せずに通します。判定は内部でのみ行うため公開しません。
+const (
+	schemeGCS = "gs"
+	schemeS3  = "s3"
 )
 
 // localdevHostnames は、ローカル開発環境で一般的に使用されるホスト名のセットです。
@@ -230,7 +233,7 @@ func (o *options) validateURL(ctx context.Context, rawURL string) error {
 	}
 
 	switch strings.ToLower(parsed.Scheme) {
-	case SchemeGCS, SchemeS3:
+	case schemeGCS, schemeS3:
 		// クラウドストレージ SDK が接続先を決定するため、ここでは検証しない。
 		return nil
 	case SchemeHTTP, SchemeHTTPS:
