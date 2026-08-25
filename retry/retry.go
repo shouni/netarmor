@@ -147,6 +147,8 @@ func addSaturating(a, b uint) uint {
 
 // retryAfterHint は、エラーチェーンから DelayHinter による待機時間の指示を取り出します。
 func retryAfterHint(err error) (time.Duration, bool) {
+	// errors.AsType は T が error を満たすことを要求します。DelayHinter は error を
+	// 埋め込まない口なので、ここは errors.As のままにします（go fix は誤変換します）。
 	var h DelayHinter
 	if errors.As(err, &h) {
 		if d := h.RetryAfter(); d > 0 {
