@@ -8,11 +8,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go Reference](https://pkg.go.dev/badge/github.com/shouni/netarmor.svg)](https://pkg.go.dev/github.com/shouni/netarmor)
 
-## 💡 概要 (About)— 鉄壁のネットワーク防御と回復力を提供する高信頼性ユーティリティ
+## 💡 概要 (About)
 
-**Net Armor** は、Go言語アプリケーションの外部通信における「安定性」と「安全性」を強化するためのネットワークユーティリティキットです。
-
-一時的なネットワークエラーに対する指数バックオフリトライ機能と、SSRF (Server-Side Request Forgery) や DNS Rebinding 攻撃からインフラを保護するセキュリティ機能を提供します。
+**Net Armor** は、Go アプリケーションの外部通信における「安定性」と「安全性」を強化するネットワークユーティリティキットです。一時的なネットワークエラーに対する指数バックオフリトライと、SSRF (Server-Side Request Forgery) や DNS Rebinding 攻撃からインフラを保護するセキュリティ機能を提供します。
 
 ## ✨ 特徴
 
@@ -65,6 +63,8 @@ client := &http.Client{
 }
 ```
 
+> ⚠️ **Transport だけを使う場合、リダイレクトポリシーは効きません。** `WithMaxRedirects` / `WithAllowRedirectDowngrade` は `*http.Client.CheckRedirect` 側の機能のため、自前で Client を組むと無視され、Go 既定の挙動（10 回まで追従・ダウングレード制限なし）になります。IP 検証は Transport 側なので引き続き有効です。リダイレクトの制御が必要なら `NewSafeHTTPClient` を使用してください。
+
 ### 2. URL の静的検証
 
 ユーザー入力を受け付けた時点で早期に弾きたい場合は `ValidateURL` を使用します。
@@ -81,6 +81,10 @@ if err := securenet.ValidateURL(ctx, rawURL); err != nil {
         // 許可されていないスキーム
     case errors.Is(err, securenet.ErrInvalidURL):
         // URL のパース失敗
+    case errors.Is(err, securenet.ErrEmptyHost):
+        // ホスト名が空
+    case errors.Is(err, securenet.ErrNoAddresses):
+        // 名前解決の結果が空
     }
 }
 ```
@@ -234,17 +238,6 @@ if re, ok := errors.AsType[*retry.Error](err); ok {
 ---
 
 ## 🔄 移行 (Migration)
-
-### 未リリース (Unreleased)
-
-`securenet` に破壊的変更があります。
-
-| 変更 | 影響 | 対応 |
-| --- | --- | --- |
-| `SchemeGCS` / `SchemeS3` を削除 | 参照箇所がコンパイルエラーになる | リテラル `"gs"` / `"s3"` に置き換え |
-| `ValidateURL` が `gs://` / `s3://` を拒否 | **コンパイルは通るが戻り値が変わる**。`ErrDisallowedScheme` が返る | クラウドストレージ URI は `ValidateURL` に通さない |
-
-`retry` は内部で使う `cenkalti/backoff` を v5 から v7 に更新しましたが、公開 API と観測できる挙動は変わりません。ctx を受け取る `RunCtx` / `RunValueCtx` が追加されています。
 
 ### v1.1.0 → v1.2.0
 
