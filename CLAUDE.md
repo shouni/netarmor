@@ -39,7 +39,7 @@ Three files: `securenet.go` (public entry points + validation core), `options.go
 
 Two distinct layers that are meant to be used together; do not collapse them:
 
-1. **Static validation** (`ValidateURL`) — parses the URL, allows `gs://` and `s3://` unconditionally (cloud SDKs handle their own routing), allows `http`/`https` only after resolving the hostname and rejecting any restricted IP. Takes no internal timeout; the caller's `ctx` governs.
+1. **Static validation** (`ValidateURL`) — parses the URL, allows `http`/`https` only after resolving the hostname and rejecting any restricted IP; every other scheme is `ErrDisallowedScheme` — `gs://` / `s3://` used to be waved through for cloud SDKs and no longer are. Takes no internal timeout; the caller's `ctx` governs.
 2. **Connect-time validation** (`NewSafeHTTPClient` / `NewSafeTransport`) — the real TOCTOU defense. `options.dialContext` resolves the host itself, rejects if *any* returned IP is restricted, then dials the **already-resolved IP** rather than the hostname, so a rebinding DNS answer between check and connect cannot be exploited. Re-dialing by hostname would reintroduce the hole.
 
 `IsSecureServiceURL` is a separate, weaker policy check (no DNS): HTTPS always OK, HTTP only for hostnames in `localdevHostnames`, empty host rejected. It answers "is this service URL configured sensibly", not "is it safe to fetch".

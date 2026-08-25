@@ -111,9 +111,6 @@ func TestValidateURL(t *testing.T) {
 		inputURL string
 		wantErr  error // nil なら成功を期待
 	}{
-		{"CloudStorage_GCS", "gs://bucket-name/object/path", nil},
-		{"CloudStorage_S3", "s3://my-bucket/data.json", nil},
-		{"MixedCase_Scheme_GCS", "GS://bucket/object", nil},
 		{"HTTPS_PublicDomain", "https://example.com/api", nil},
 		{"HTTP_PublicDomain", "http://example.com/data", nil},
 		{"HTTPS_DualStack_Public", "https://public.test/api", nil},
@@ -146,6 +143,9 @@ func TestValidateURL(t *testing.T) {
 		{"Resolved_IPv6Documentation", "https://docexample.test/api", securenet.ErrRestrictedIP},
 
 		{"FTP_InvalidScheme", "ftp://example.com/file", securenet.ErrDisallowedScheme},
+		{"GCS_InvalidScheme", "gs://bucket-name/object/path", securenet.ErrDisallowedScheme},
+		{"S3_InvalidScheme", "s3://my-bucket/data.json", securenet.ErrDisallowedScheme},
+		{"MixedCase_GCS_InvalidScheme", "GS://bucket/object", securenet.ErrDisallowedScheme},
 		{"File_InvalidScheme", "file:///etc/passwd", securenet.ErrDisallowedScheme},
 		{"EmptyHost", "http://", securenet.ErrEmptyHost},
 		{"OnlyScheme", "https://", securenet.ErrEmptyHost},

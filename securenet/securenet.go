@@ -47,13 +47,6 @@ const (
 	SchemeHTTPS = "https"
 )
 
-// クラウドストレージの URI スキーム。接続先は各 SDK が決めるため、
-// ValidateURL は名前解決せずに通します。判定は内部でのみ行うため公開しません。
-const (
-	schemeGCS = "gs"
-	schemeS3  = "s3"
-)
-
 // localdevHostnames は、ローカル開発環境で一般的に使用されるホスト名のセットです。
 var localdevHostnames = map[string]struct{}{
 	"localhost":            {},
@@ -102,8 +95,8 @@ func IsSecureServiceURL(serviceURL string) bool {
 //		// 許可されていないスキーム
 //	}
 //
-// gs:// および s3:// スキームは、クラウド SDK が独自に接続先を決定するため
-// 名前解決を行わずに許可されます。
+// 許可されるスキームは http と https だけです。それ以外はすべて
+// ErrDisallowedScheme になります。
 //
 // 名前解決のタイムアウトは ctx で制御してください。本関数は独自のタイムアウトを設定しません。
 func ValidateURL(ctx context.Context, rawURL string, opts ...Option) error {
@@ -233,9 +226,6 @@ func (o *options) validateURL(ctx context.Context, rawURL string) error {
 	}
 
 	switch strings.ToLower(parsed.Scheme) {
-	case schemeGCS, schemeS3:
-		// クラウドストレージ SDK が接続先を決定するため、ここでは検証しない。
-		return nil
 	case SchemeHTTP, SchemeHTTPS:
 		// 検証を続行
 	default:
