@@ -235,17 +235,6 @@ if re, ok := errors.AsType[*retry.Error](err); ok {
 
 ## 🔄 移行 (Migration)
 
-### 未リリース (Unreleased)
-
-`securenet` に破壊的変更があります。
-
-| 変更 | 影響 | 対応 |
-| --- | --- | --- |
-| `SchemeGCS` / `SchemeS3` を削除 | 参照箇所がコンパイルエラーになる | リテラル `"gs"` / `"s3"` に置き換え |
-| `ValidateURL` が `gs://` / `s3://` を拒否 | **コンパイルは通るが戻り値が変わる**。`ErrDisallowedScheme` が返る | クラウドストレージ URI は `ValidateURL` に通さない |
-
-`retry` は内部で使う `cenkalti/backoff` を v5 から v7 に更新しましたが、公開 API と観測できる挙動は変わりません。ctx を受け取る `RunCtx` / `RunValueCtx` が追加されています。
-
 ### v1.1.0 → v1.2.0
 
 v1.2.0 で非推奨 API を削除しました。以下の対応が必要です。
