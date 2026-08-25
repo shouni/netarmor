@@ -1,5 +1,5 @@
 // Package securenet は、SSRF (Server-Side Request Forgery) 対策として、
-// URLのスキーム検証やDNS Rebinding対策済みのHTTPクライアント生成を行うユーティリティを提供します。
+// URL のスキーム検証や DNS Rebinding 対策済みの HTTP クライアント生成を行うユーティリティを提供します。
 //
 // # 二段構えの防御
 //
@@ -39,11 +39,11 @@ import (
 )
 
 const (
-	// SchemeHTTP は平文HTTPスキームを表します。
+	// SchemeHTTP は平文 HTTP スキームを表します。
 	// IsSecureServiceURL ではローカル開発ホスト名との組み合わせでのみ許可されます
 	// （ValidateURL と接続時検証では制限対象でないホストへの http は許可されます）。
 	SchemeHTTP = "http"
-	// SchemeHTTPS は暗号化されたHTTPSスキームを表します。
+	// SchemeHTTPS は暗号化された HTTPS スキームを表します。
 	SchemeHTTPS = "https"
 )
 
@@ -111,7 +111,7 @@ func NewSafeTransport(timeout time.Duration, opts ...Option) *http.Transport {
 	return newOptions(opts).newTransport(timeout)
 }
 
-// NewSafeHTTPClient は、接続直前にIP検証を行うことでDNS Rebindingを防ぐクライアントを生成します。
+// NewSafeHTTPClient は、接続直前に IP 検証を行うことで DNS Rebinding を防ぐクライアントを生成します。
 //
 // 既定では以下のポリシーが適用されます。
 //   - プライベート / ループバック / リンクローカル等への接続を拒否
@@ -181,7 +181,7 @@ func (o *options) dialContext(dialer *net.Dialer) func(context.Context, string, 
 			return nil, fmt.Errorf("securenet: split host port %q: %w", addr, err)
 		}
 
-		// 接続直前に名前解決を行い、解決されたIPを即座にチェックする (TOCTOU対策)
+		// 接続直前に名前解決を行い、解決された IP を即座に検証する (TOCTOU 対策)
 		addrs, err := o.resolveAndCheck(ctx, host)
 		if err != nil {
 			return nil, err
@@ -270,9 +270,6 @@ func (o *options) resolveAndCheck(ctx context.Context, host string) ([]netip.Add
 
 // isLocalDevHostname は、指定されたホスト名が既知のローカル開発ホスト名と一致するかどうかを確認します。
 func isLocalDevHostname(hostname string) bool {
-	if hostname == "" {
-		return false
-	}
 	_, ok := localdevHostnames[hostname]
 	return ok
 }

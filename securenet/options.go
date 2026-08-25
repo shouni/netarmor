@@ -210,7 +210,8 @@ func WithAllowedPrefixes(prefixes ...netip.Prefix) Option {
 }
 
 // WithBlockedCIDRs は、既定のブロック一覧に追加でネットワークを登録します。
-// 不正な CIDR 表記は無視されます。
+//
+// 不正な CIDR 表記は無視されます。事前に検証したい場合は netip.ParsePrefix を使用してください。
 func WithBlockedCIDRs(cidrs ...string) Option {
 	return func(o *options) {
 		for _, c := range cidrs {

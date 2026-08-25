@@ -29,7 +29,7 @@
 | パッケージ | 説明 | 主な提供機能 |
 | --- | --- | --- |
 | **`securenet`** | **ネットワークセキュリティ**。SSRF 対策や、サービス URL の妥当性判定を行います。 | `NewSafeHTTPClient` / `NewSafeTransport` / `ValidateURL` / `IsSecureServiceURL` |
-| **`retry`** | **耐障害性向上**。一時的なエラーが発生した際に、指数バックオフを用いて再試行します。 | `Run` / `RunValue` / `With*` オプション / `DelayHinter` |
+| **`retry`** | **耐障害性向上**。一時的なエラーが発生した際に、指数バックオフを用いて再試行します。 | `Run` / `RunValue` / `RunCtx` / `RunValueCtx` / `With*` オプション / `DelayHinter` |
 
 ---
 
@@ -37,8 +37,7 @@
 
 ### 1. 安全な HTTP リクエスト (`securenet`)
 
-DNS Rebinding 攻撃を防ぐため、接続を確立する直前に名前解決を行い、解決された IP アドレスが制限対象の範囲（プライベート / ループバック / リンクローカル等）でないか検証した上で、**その IP に直接接続**します。
-安全な HTTP クライアントは環境変数の `HTTP_PROXY` / `HTTPS_PROXY` を使用しません。
+既定のポリシーは、プライベート / ループバック / リンクローカル等への接続を拒否し、環境変数の `HTTP_PROXY` / `HTTPS_PROXY` を無視します。
 
 ```go
 import (
@@ -153,6 +152,14 @@ body, err := retry.RunValue(ctx, func() ([]byte, error) {
 }, retry.WithMaxRetries(3))
 ```
 
+操作に ctx を渡したい場合は `RunCtx` / `RunValueCtx` を使用します。クロージャで ctx を捕捉する必要がなくなります。
+
+```go
+err := retry.RunCtx(ctx, func(ctx context.Context) error {
+    return callRemoteResource(ctx)
+}, retry.WithMaxRetries(3))
+```
+
 サーバが待機時間を指定してくる場合（HTTP 429/503 の `Retry-After` など）は、エラー型に `RetryAfter() time.Duration` を実装してください（`retry.DelayHinter`）。正の値を返すと、次の待機時間は指数バックオフの算出値の代わりにその値になり、以降のバックオフ計算はリセットされます。
 
 ```go
@@ -179,7 +186,7 @@ if re, ok := errors.AsType[*retry.Error](err); ok {
 | Option | 既定値 | 用途 |
 | --- | --- | --- |
 | `WithMaxRetries` | 3 | リトライ回数（**0 でリトライなし**） |
-| `WithMaxAttempts` | 4 | 初回を含む総試行回数 |
+| `WithMaxAttempts` | 4 (= 既定の 3 リトライ) | 初回を含む総試行回数 |
 | `WithInitialInterval` | 5s | 初回待機時間 |
 | `WithMaxInterval` | 30s | 待機時間の上限 |
 | `WithMultiplier` | 1.5 | 増加倍率 |
@@ -198,13 +205,14 @@ if re, ok := errors.AsType[*retry.Error](err); ok {
 * プライベート IP アドレス範囲 (RFC 1918、IPv6 ULA を含む)
 * ループバックアドレス (localhost, 127.0.0.1, ::1)
 * リンクローカルアドレス (169.254.0.0/16 等)
-* 未指定アドレス (0.0.0.0, ::)
+* 未指定アドレス (0.0.0.0, ::) と "this network" (0.0.0.0/8)
 * Carrier-grade NAT 範囲 (100.64.0.0/10)
+* IETF プロトコル割り当て (192.0.0.0/24)、Discard-Only (100::/64)
 * ベンチマーク用ネットワーク (198.18.0.0/15)
 * ドキュメント用 / TEST-NET 範囲 (192.0.2.0/24、198.51.100.0/24、203.0.113.0/24、2001:db8::/32、3fff::/20)
 * IPv4 を埋め込める変換範囲 — NAT64 (64:ff9b::/96、64:ff9b:1::/48)、6to4 (2002::/16、192.88.99.0/24)、Teredo (2001::/32)
 * 廃止されたサイトローカル (fec0::/10)、SRv6 SID (5f00::/16)
-* マルチキャスト、予約済みアドレス範囲
+* マルチキャスト、予約済み範囲 (240.0.0.0/4)
 
 `::ffff:127.0.0.1` のような IPv4-mapped IPv6 表記は正規化した上で判定するため、表記による回避はできません。NAT64 などの変換範囲は、アドレス内に埋め込んだ内部 IPv4（例: `64:ff9b::a9fe:a9fe` はメタデータエンドポイント）への到達経路になりうるため範囲全体をブロックします。NAT64 環境で正当に必要な場合は `WithAllowedCIDRs` で明示的に許可してください。
 
@@ -216,11 +224,24 @@ if re, ok := errors.AsType[*retry.Error](err); ok {
 
 ---
 
-## 🔄 v1.1.0 からの移行 (Migration)
+## 🔄 移行 (Migration)
+
+### 未リリース (Unreleased)
+
+`securenet` に破壊的変更があります。
+
+| 変更 | 影響 | 対応 |
+| --- | --- | --- |
+| `SchemeGCS` / `SchemeS3` を削除 | 参照箇所がコンパイルエラーになる | リテラル `"gs"` / `"s3"` に置き換え |
+| `ValidateURL` が `gs://` / `s3://` を拒否 | **コンパイルは通るが戻り値が変わる**。`ErrDisallowedScheme` が返る | クラウドストレージ URI は `ValidateURL` に通さない |
+
+`retry` は内部で使う `cenkalti/backoff` を v5 から v7 に更新しましたが、公開 API と観測できる挙動は変わりません。ctx を受け取る `RunCtx` / `RunValueCtx` が追加されています。
+
+### v1.1.0 → v1.2.0
 
 v1.2.0 で非推奨 API を削除しました。以下の対応が必要です。
 
-### `retry`
+#### `retry`
 
 ```go
 // Before (v1.1.0)
@@ -244,7 +265,7 @@ err := retry.Run(ctx, op,
 
 > **注意**: `Config.MaxRetries` は 0 を「未設定」として既定値 3 に補完していましたが、`WithMaxRetries(0)` は「リトライしない」を意味します。0 を渡していた箇所は意図を確認してください。
 
-### `securenet`
+#### `securenet`
 
 ```go
 // Before (v1.1.0)
@@ -269,6 +290,6 @@ if err := securenet.ValidateURL(ctx, rawURL); err != nil {
 
 ---
 
-### 📜 ライセンス (License)
+## 📜 ライセンス (License)
 
 このプロジェクトは [MIT License](https://opensource.org/licenses/MIT) の下で公開されています。

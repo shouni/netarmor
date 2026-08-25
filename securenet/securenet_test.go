@@ -100,7 +100,7 @@ func TestIsSecureServiceURL(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------
-// TestValidateURL: SSRF対策のURL検証テスト
+// TestValidateURL: SSRF 対策の URL 検証テスト
 // ----------------------------------------------------------------------
 
 func TestValidateURL(t *testing.T) {
@@ -295,7 +295,7 @@ func TestValidateURL_PolicyOptions(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------
-// TestNewSafeHTTPClient: DNS Rebinding対策クライアントのテスト
+// TestNewSafeHTTPClient: DNS Rebinding 対策クライアントのテスト
 // ----------------------------------------------------------------------
 
 func TestNewSafeHTTPClient(t *testing.T) {
@@ -365,7 +365,7 @@ func TestNewSafeHTTPClient(t *testing.T) {
 	})
 
 	t.Run("BlockRebindingResolver", func(t *testing.T) {
-		// 名前解決の結果がプライベートIPに差し替えられた状況を再現する
+		// 名前解決の結果がプライベート IP に差し替えられた状況を再現する
 		rebinding := fakeResolver{"rebind.test": {"127.0.0.1"}}
 		client := securenet.NewSafeHTTPClient(2*time.Second, securenet.WithResolver(rebinding))
 
