@@ -1,8 +1,4 @@
-# 実体は shouni/workflows が持つ。ジョブの構成・govulncheck の起動方法・
-# check-latest を付ける理由は、そちらの README.md「設計の判断」にある。
-#
-# @v1 は張り替えられる移動タグ。Dependabot はジョブレベルの uses: を更新しないため
-# （実測。詳細は workflows の README）、不変タグで固定しても自動では上がらない。
+# CI の実体は shouni/workflows。ジョブ構成とタグ運用の理由はそちらの README にある。
 name: CI
 
 on:
@@ -26,5 +22,4 @@ jobs:
       upload-coverage: true
       # URL 検証はユーザー入力を直接受けるため、探索を毎回回す。
       fuzz-targets: "./securenet#FuzzValidateURL ./securenet#FuzzIsSecureServiceURL"
-      # 移行前からこのリポジトリだけ 60s で回している（既定の 20s より長い）。
       fuzz-time: 60s
