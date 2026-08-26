@@ -1,3 +1,8 @@
+# 実体は shouni/workflows が持つ。ジョブの構成・govulncheck の起動方法・
+# check-latest を付ける理由は、そちらの README.md「設計の判断」にある。
+#
+# @v1 は張り替えられる移動タグ。Dependabot はジョブレベルの uses: を更新しないため
+# （実測。詳細は workflows の README）、不変タグで固定しても自動では上がらない。
 name: CI
 
 on:
@@ -14,102 +19,12 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Build & Test
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Build
-        run: go build ./...
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Gofmt check
-        run: test -z "$(gofmt -l .)"
-
-      # -shuffle=on はテスト間の暗黙の実行順序依存を検出します。
-      - name: Test (with race detector)
-        run: go test -shuffle=on -race -coverprofile=coverage.out -covermode=atomic ./...
-
-      - name: Coverage summary
-        run: |
-          go tool cover -func=coverage.out | tee coverage.txt
-          {
-            echo "### Coverage"
-            echo '```'
-            tail -n 1 coverage.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload coverage artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: coverage
-          path: coverage.out
-          retention-days: 7
-
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.13.1
-
-  fuzz:
-    name: Fuzz (smoke)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      # URL 検証はユーザー入力を直接受けるため、短時間のファジングを毎回回す。
-      # 失敗した場合は再現用シードを securenet/testdata/fuzz/ にコミットして回帰テスト化する。
-      - name: Fuzz ValidateURL
-        run: go test ./securenet -run '^$' -fuzz FuzzValidateURL -fuzztime 60s
-
-      - name: Fuzz IsSecureServiceURL
-        run: go test ./securenet -run '^$' -fuzz FuzzIsSecureServiceURL -fuzztime 60s
-
-      - name: Upload fuzz failures
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: fuzz-corpus
-          path: securenet/testdata/fuzz/
-          retention-days: 7
-          if-no-files-found: ignore
-
-  vulncheck:
-    name: govulncheck
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: golang/govulncheck-action@v1
-        with:
-          go-version-file: go.mod
-          repo-checkout: false
+  ci:
+    uses: shouni/workflows/.github/workflows/go-ci.yml@v1
+    with:
+      coverage: true
+      upload-coverage: true
+      # URL 検証はユーザー入力を直接受けるため、探索を毎回回す。
+      fuzz-targets: "./securenet#FuzzValidateURL ./securenet#FuzzIsSecureServiceURL"
+      # 移行前からこのリポジトリだけ 60s で回している（既定の 20s より長い）。
+      fuzz-time: 60s
