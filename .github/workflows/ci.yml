@@ -20,9 +20,7 @@ permissions:
 
 jobs:
   ci:
-    # ★ 一時的なカナリア固定。v1 を v1.2.0 へ動かす前に、この 1 本で緑を確認する。
-    #   確認が済んだら @v1 に戻すこと（workflows の README「変更を反映する手順」6）。
-    uses: shouni/workflows/.github/workflows/go-ci.yml@v1.2.0
+    uses: shouni/workflows/.github/workflows/go-ci.yml@v1
     with:
       coverage: true
       upload-coverage: true
