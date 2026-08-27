@@ -4,8 +4,8 @@
 
 | バージョン | サポート状況 |
 | --- | --- |
-| v1.3.x | ✅ サポート中 |
-| v1.2.x 以前 | ❌ 非サポート |
+| v1.4.x | ✅ サポート中 |
+| v1.3.x 以前 | ❌ 非サポート |
 
 ## 脆弱性の報告 (Reporting a Vulnerability)
 
@@ -15,7 +15,7 @@ GitHub の [Private vulnerability reporting](https://github.com/shouni/netarmor/
 
 報告には以下を含めてください。
 
-- 影響を受けるパッケージ (`securenet` / `retry`) とバージョン
+- 影響を受けるバージョン
 - 再現手順、または PoC コード
 - 想定される影響（SSRF 迂回、情報漏洩など）
 

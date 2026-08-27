@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`github.com/shouni/netarmor` is a zero-CLI Go library (no `main` package) providing two independent packages for hardening outbound network calls: `securenet` (SSRF / DNS-rebinding defense) and `retry` (exponential backoff). Consumers import one or both; the packages have no dependency on each other.
+`github.com/shouni/netarmor` is a zero-CLI Go library (no `main` package) with a single package, `securenet` — SSRF / DNS-rebinding defense for outbound calls. It has **no external dependencies**: `go.mod` carries no `require` and `go.sum` is empty. The `retry` package lived here until v1.4.0 and now belongs to `go-http-kit`; both of its consumers already depended on that module, and moving it is what emptied this go.mod.
 
-**This library has a wide blast radius.** Sibling repos under `~/GolandProjects` list netarmor in ~21 `go.mod` files, 11 of them as a *direct* dependency (`ap-chain`, `ap-comic`, `ap-comp`, `ap-manga-web`, `ap-mcp`, `ap-music`, `ap-mv`, `go-gemini-client`, `go-http-kit`, `go-web-reader`, `git-gemini-web`). `go-http-kit` in particular re-exports netarmor behavior, so a change here can break repos that never import netarmor directly. Before removing or changing any exported symbol, grep the sibling repos for it — the v1.2.0 removal cycle needed coordinated edits in six repos.
+**This library has a wide blast radius.** Sibling repos under `~/GolandProjects` list netarmor in 14 `go.mod` files, 7 of them as a *direct* dependency (`adk-review`, `ap-comp`, `ap-mv`, `ap-story`, `ap-voice`, `go-http-kit`, `go-web-reader`); the rest pull it in through `go-http-kit`, which re-exports netarmor behavior, so a change here can break repos that never import netarmor directly. Before removing or changing any exported symbol, grep the sibling repos for it — the v1.2.0 removal cycle needed coordinated edits in six repos.
 
 ## Commands
 
@@ -19,7 +19,6 @@ test -z "$(gofmt -l .)"        # CI fails on unformatted files
 # Single test / subtest (subtest names are Japanese; quote them)
 go test ./securenet -run TestValidateURL
 go test ./securenet -run 'TestNewSafeHTTPClient/BlockLoopbackConnection'
-go test ./retry -run 'TestRun/成功'
 
 # Fuzzing (CI runs each for 60s)
 go test ./securenet -run '^$' -fuzz FuzzValidateURL -fuzztime 30s
@@ -54,27 +53,10 @@ Key invariants to preserve:
 - **`defaultOptions` wraps the shared prefix slice in `slices.Clip`** so `WithBlockedCIDRs`' `append` can't mutate the package-level backing array.
 - **IPv4-embedding transition ranges (NAT64 `64:ff9b::/96` + `64:ff9b:1::/48`, 6to4 `2002::/16` + `192.88.99.0/24`, Teredo `2001::/32`) are blocked wholesale**, not by extracting and checking the embedded IPv4 — extraction would interact badly with allowlist semantics and add parsing surface. NAT64 users opt in via `WithAllowedCIDRs` (documented on `defaultBlockedPrefixes`).
 
-### `retry` — backoff wrapper
-
-Three files: `retry.go` (`Run`/`RunValue`), `options.go` (`settings`, all `With*` options, defaults), `errors.go` (`*Error` + sentinels).
-
-Built on `cenkalti/backoff/v7`, whose API has details that matter here:
-
-- `backoff.WithMaxTries(n)` counts **total attempts**, not retries — hence `addSaturating(s.maxRetries, 1)`.
-- `MaxElapsedTime` defaults to 15 minutes upstream, so `WithMaxElapsedTime(s.maxElapsedTime)` is always passed (default 0 = disabled). Retries are bounded by count and context only.
-- `backoff.Retry` returns a `*backoff.RetryError` on **every** failure, carrying both `LastErr` (the last operation error) and `Cause` (why it stopped: `ErrPermanent` / `ErrExhausted` / `ErrMaxElapsedTime` / the context cause). `newError` is the single place that maps that onto `*Error` — don't reintroduce closure-tracked `lastErr`/`permanent` state, the upstream error is now the source of truth.
-
-`Run` delegates to `RunValue[struct{}]`, and `RunCtx` / `RunValueCtx` (the variants whose *operation* takes a `ctx`) delegate down to the same place — keep the retry logic in `RunValue` only. `RunValueCtx` normalizes a nil `ctx` before capturing it, so the operation never receives nil.
-
-Retry-After support: an operation error whose chain implements `DelayHinter` (`RetryAfter() time.Duration`, detected with `errors.As` — `errors.AsType` can't be used, `DelayHinter` doesn't embed `error`) overrides the next backoff interval. The closure returns `backoff.RetryAfter(d, err)`; backoff waits that duration, resets its schedule, and keeps `err` as the `RetryError.LastErr` should retrying later stop. The hook still needs the unwrapped original, since `WithNotify` is handed the `*backoff.RetryAfterError` itself — that's what `unwrapRetryAfter` is for. `ShouldRetryFunc` returning false takes precedence over any hint.
-
-`*Error` implements multi-error `Unwrap() []error`, so `errors.Is` matches the operation error, the context cause, *and* exactly one of `ErrPermanent` / `ErrExhausted`. The `Permanent` flag drives that classification; `newError` sets it from `RetryError.Cause`. `Error.Cause` holds *only* context causes — `ErrMaxElapsedTime` is deliberately folded into `ErrExhausted` (as it was under v5, where it surfaced as a discarded `context.DeadlineExceeded`) so the package's own sentinels stay the whole classification surface.
-
 ## Conventions
 
 - **Doc comments and test subtest names are Japanese; error strings are English** (lowercase, no trailing punctuation, `package: detail` prefix), following Go convention for a published library. Don't reintroduce Japanese error text — consumers classify with `errors.Is`/`errors.As`, and tests must not assert on message substrings.
-- Both test packages are **external** (`securenet_test`, `retry_test`) — black-box only. If something needs internal access, prefer exposing it properly over switching the package.
+- The test package is **external** (`securenet_test`) — black-box only. If something needs internal access, prefer exposing it properly over switching the package.
 - **`securenet` tests are hermetic**: every path that resolves a name injects `WithResolver(...)`. IP-literal hosts skip the resolver entirely (`resolveAndCheck` parses them directly), which is why the `httptest` cases work without one. Never add a test that hits real DNS.
-- `retry` tests use millisecond intervals and `WithRandomizationFactor(0)` for determinism — never wait on the default 5s/30s intervals.
-- **No assertion library — both packages use plain `testing`.** netarmor is a base dependency in ~21 sibling `go.mod` files, and a test-only requirement still lands in every consumer's `go.sum` (verified: testify pulled `go.yaml.in/yaml/v3` in with it). `cenkalti/backoff/v7` is the module's only requirement; keep it that way.
-- Examples in `example_test.go` carry `// Output:` comments, so they run as tests. Keep them deterministic (fixed resolver, zero jitter).
+- **No assertion library — plain `testing` only, and `go.mod` must stay empty.** netarmor is a base dependency in ~21 sibling `go.mod` files, and even a test-only requirement lands in every consumer's `go.sum` (verified: testify pulled `go.yaml.in/yaml/v3` in with it). An empty `go.sum` is itself the thing being protected — the same bar `go-utils` holds.
+- Examples in `example_test.go` carry `// Output:` comments, so they run as tests. Keep them deterministic — inject a fixed resolver, never touch real DNS.
