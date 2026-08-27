@@ -6,7 +6,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `github.com/shouni/netarmor` is a zero-CLI Go library (no `main` package) with a single package, `securenet` — SSRF / DNS-rebinding defense for outbound calls. It has **no external dependencies**: `go.mod` carries no `require` and `go.sum` is empty. The `retry` package lived here until v1.4.0 and now belongs to `go-http-kit`; both of its consumers already depended on that module, and moving it is what emptied this go.mod.
 
-**This library has a wide blast radius.** Sibling repos under `~/GolandProjects` list netarmor in 12 `go.mod` files, 7 of them as a *direct* dependency (`adk-review`, `ap-comp`, `ap-mv`, `ap-story`, `ap-voice`, `go-http-kit`, `go-web-reader`); the rest pull it in through `go-http-kit`, which re-exports netarmor behavior, so a change here can break repos that never import netarmor directly. Before removing or changing any exported symbol, grep the sibling repos for it — the v1.2.0 removal cycle needed coordinated edits in six repos.
+**This library has a wide blast radius.** Most sibling repos under `~/GolandProjects` reach netarmor
+through `go-http-kit`, which re-exports its behavior, so a change here can break repos that never import
+netarmor directly. **Before removing or changing any exported symbol, grep the siblings for it — including
+`_test.go`.** The v1.2.0 removal cycle needed coordinated edits in six repos, and a later trim counted only
+non-test files and dropped a symbol six test files were using.
+
+    grep -rl "shouni/netarmor" ~/GolandProjects/*/go.mod
+
+Counting the dependants here instead of grepping was tried and went stale twice in a single day; some of
+those repos are private, too, so their names do not belong in a published file.
 
 ## Commands
 
