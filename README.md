@@ -10,15 +10,16 @@
 
 ## 💡 概要 (About)
 
-**Net Armor** は、Go アプリケーションの外部通信における「安定性」と「安全性」を強化するネットワークユーティリティキットです。一時的なネットワークエラーに対する指数バックオフリトライと、SSRF (Server-Side Request Forgery) や DNS Rebinding 攻撃からインフラを保護するセキュリティ機能を提供します。
+**Net Armor** は、Go アプリケーションの外部通信を SSRF (Server-Side Request Forgery) や DNS Rebinding 攻撃から保護するセキュリティライブラリです。**外部依存を持ちません**（`go.mod` の require は空です）。
+
+> **v1.4.0 で `retry` パッケージを [go-http-kit](https://github.com/shouni/go-http-kit) へ移しました。** 利用者は import パスを `github.com/shouni/go-http-kit/retry` に変更してください。API は変わっていません。
 
 ## ✨ 特徴
 
-* **堅牢なリトライ (`retry`)**: `backoff/v7` をベースに、Context キャンセル・最大試行回数・ジッタ・観測フック・サーバ指定の待機時間 (Retry-After) を直感的に扱えるインターフェースを提供。操作に ctx を渡す `RunCtx` / `RunValueCtx` も利用できます。
 * **強力な防御 (`securenet`)**: HTTP クライアントの Transport 層で接続直前に IP アドレスを検証し、**検証済み IP に対して直接接続**します。DNS Rebinding 等の TOCTOU 攻撃を遮断します。
 * **型付きエラー**: すべての失敗理由を `errors.Is` / `errors.As` で分類できます。エラーメッセージの文字列比較は不要です。
 * **テスト容易性**: リゾルバを差し替えられるため、実 DNS に依存しないユニットテストが書けます。
-* **モジュール性**: 各パッケージは独立しており、必要な機能のみをインポートして利用可能です。
+* **依存ゼロ**: 標準ライブラリのみで動きます。取り込んでも利用側のモジュールグラフが広がりません。
 
 ---
 
@@ -27,7 +28,6 @@
 | パッケージ | 説明 | 主な提供機能 |
 | --- | --- | --- |
 | **`securenet`** | **ネットワークセキュリティ**。SSRF 対策や、サービス URL の妥当性判定を行います。 | `NewSafeHTTPClient` / `NewSafeTransport` / `ValidateURL` / `IsSecureServiceURL` |
-| **`retry`** | **耐障害性向上**。一時的なエラーが発生した際に、指数バックオフを用いて再試行します。 | `Run` / `RunValue` / `RunCtx` / `RunValueCtx` / `With*` オプション / `DelayHinter` |
 
 ---
 
@@ -131,83 +131,6 @@ case errors.Is(err, securenet.ErrTooManyRedirects):  // 追従回数の上限に
 case errors.Is(err, securenet.ErrRedirectDowngrade): // https から http へのダウングレード
 }
 ```
-
-### 4. 指数バックオフリトライ (`retry`)
-
-一時的な接続エラーに対し、適切な待機時間を挟みながら自動的にリトライを行います。
-
-```go
-import (
-    "context"
-    "log/slog"
-    "time"
-
-    "github.com/shouni/netarmor/retry"
-)
-
-err := retry.Run(ctx, func() error {
-    return callRemoteResource()
-},
-    retry.WithName("ExternalAPI"),
-    retry.WithMaxRetries(5),
-    retry.WithShouldRetry(isTransient),
-    retry.WithNotify(func(err error, attempt uint, next time.Duration) {
-        slog.Warn("retrying", "attempt", attempt, "next", next, "err", err)
-    }),
-)
-```
-
-戻り値を伴う処理には `RunValue` を使用します（ジェネリクス対応）。
-
-```go
-body, err := retry.RunValue(ctx, func() ([]byte, error) {
-    return fetch(ctx, url)
-}, retry.WithMaxRetries(3))
-```
-
-操作に ctx を渡したい場合は `RunCtx` / `RunValueCtx` を使用します。クロージャで ctx を捕捉する必要がなくなります。
-
-```go
-err := retry.RunCtx(ctx, func(ctx context.Context) error {
-    return callRemoteResource(ctx)
-}, retry.WithMaxRetries(3))
-```
-
-サーバが待機時間を指定してくる場合（HTTP 429/503 の `Retry-After` など）は、エラー型に `RetryAfter() time.Duration` を実装してください（`retry.DelayHinter`）。正の値を返すと、次の待機時間は指数バックオフの算出値の代わりにその値になり、以降のバックオフ計算はリセットされます。
-
-```go
-type rateLimitError struct{ retryAfter time.Duration }
-
-func (e *rateLimitError) Error() string             { return "rate limited" }
-func (e *rateLimitError) RetryAfter() time.Duration { return e.retryAfter }
-```
-
-失敗理由は型で判別できます。
-
-```go
-switch {
-case errors.Is(err, retry.ErrExhausted):     // 最大試行回数に到達
-case errors.Is(err, retry.ErrPermanent):     // リトライ不能と判定
-case errors.Is(err, context.DeadlineExceeded): // タイムアウト
-}
-
-if re, ok := errors.AsType[*retry.Error](err); ok {
-    slog.Error("failed", "op", re.Op, "attempts", re.Attempts, "cause", re.Err)
-}
-```
-
-| Option | 既定値 | 用途 |
-| --- | --- | --- |
-| `WithMaxRetries` | 3 | リトライ回数（**0 でリトライなし**） |
-| `WithMaxAttempts` | 4 (= 既定の 3 リトライ) | 初回を含む総試行回数 |
-| `WithInitialInterval` | 5s | 初回待機時間 |
-| `WithMaxInterval` | 30s | 待機時間の上限 |
-| `WithMultiplier` | 1.5 | 増加倍率 |
-| `WithRandomizationFactor` | 0.5 | ジッタ（0 で無効） |
-| `WithMaxElapsedTime` | 無効 | 経過時間による打ち切り |
-| `WithShouldRetry` | 全てリトライ | リトライ可否の判定 |
-| `WithNotify` | なし | リトライ直前のフック |
-| `WithName` | なし | エラーメッセージ用の操作名 |
 
 ---
 
