@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `github.com/shouni/netarmor` is a zero-CLI Go library (no `main` package) with a single package, `securenet` — SSRF / DNS-rebinding defense for outbound calls. It has **no external dependencies**: `go.mod` carries no `require` and `go.sum` is empty. The `retry` package lived here until v1.4.0 and now belongs to `go-http-kit`; both of its consumers already depended on that module, and moving it is what emptied this go.mod.
 
-**This library has a wide blast radius.** Sibling repos under `~/GolandProjects` list netarmor in ~21 `go.mod` files, 11 of them as a *direct* dependency (`ap-chain`, `ap-comic`, `ap-comp`, `ap-manga-web`, `ap-mcp`, `ap-music`, `ap-mv`, `go-gemini-client`, `go-http-kit`, `go-web-reader`, `git-gemini-web`). `go-http-kit` in particular re-exports netarmor behavior, so a change here can break repos that never import netarmor directly. Before removing or changing any exported symbol, grep the sibling repos for it — the v1.2.0 removal cycle needed coordinated edits in six repos.
+**This library has a wide blast radius.** Sibling repos under `~/GolandProjects` list netarmor in 14 `go.mod` files, 7 of them as a *direct* dependency (`adk-review`, `ap-comp`, `ap-mv`, `ap-story`, `ap-voice`, `go-http-kit`, `go-web-reader`); the rest pull it in through `go-http-kit`, which re-exports netarmor behavior, so a change here can break repos that never import netarmor directly. Before removing or changing any exported symbol, grep the sibling repos for it — the v1.2.0 removal cycle needed coordinated edits in six repos.
 
 ## Commands
 
@@ -59,4 +59,4 @@ Key invariants to preserve:
 - The test package is **external** (`securenet_test`) — black-box only. If something needs internal access, prefer exposing it properly over switching the package.
 - **`securenet` tests are hermetic**: every path that resolves a name injects `WithResolver(...)`. IP-literal hosts skip the resolver entirely (`resolveAndCheck` parses them directly), which is why the `httptest` cases work without one. Never add a test that hits real DNS.
 - **No assertion library — plain `testing` only, and `go.mod` must stay empty.** netarmor is a base dependency in ~21 sibling `go.mod` files, and even a test-only requirement lands in every consumer's `go.sum` (verified: testify pulled `go.yaml.in/yaml/v3` in with it). An empty `go.sum` is itself the thing being protected — the same bar `go-utils` holds.
-- Examples in `example_test.go` carry `// Output:` comments, so they run as tests. Keep them deterministic (fixed resolver, zero jitter).
+- Examples in `example_test.go` carry `// Output:` comments, so they run as tests. Keep them deterministic — inject a fixed resolver, never touch real DNS.

@@ -63,7 +63,7 @@ client := &http.Client{
 }
 ```
 
-> ⚠️ **Transport だけを使う場合、リダイレクトポリシーは効きません。** `WithMaxRedirects` / `WithAllowRedirectDowngrade` は `*http.Client.CheckRedirect` 側の機能のため、自前で Client を組むと無視され、Go 既定の挙動（10 回まで追従・ダウングレード制限なし）になります。IP 検証は Transport 側なので引き続き有効です。リダイレクトの制御が必要なら `NewSafeHTTPClient` を使用してください。
+> ⚠️ **Transport だけを使う場合、リダイレクトポリシーは効きません**（IP 検証は Transport 側なので有効なままです）。理由と影響は [SECURITY.md の防御対象外](SECURITY.md#防御対象外-out-of-scope) を参照してください。
 
 ### 2. URL の静的検証
 
