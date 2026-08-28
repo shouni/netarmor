@@ -16,7 +16,9 @@ permissions:
 
 jobs:
   ci:
-    uses: shouni/workflows/.github/workflows/go-ci.yml@v1
+    # カナリア: v1.3.0 の go-ci.yml を確認するための一時的なピン。
+    # 緑を確認して v1 を移したら @v1 に戻すこと。
+    uses: shouni/workflows/.github/workflows/go-ci.yml@v1.3.0
     with:
       coverage: true
       upload-coverage: true
