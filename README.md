@@ -2,13 +2,13 @@
 
 [![CI](https://github.com/shouni/netarmor/actions/workflows/ci.yml/badge.svg)](https://github.com/shouni/netarmor/actions/workflows/ci.yml)
 [![Status](https://img.shields.io/badge/Status-Active-brightgreen)](#)
-[![Language](https://img.shields.io/badge/Language-Go-blue)](https://golang.org/)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/shouni/netarmor)](https://golang.org/)
+[![Language](https://img.shields.io/badge/Language-Go-blue)](https://go.dev/)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/shouni/netarmor)](https://go.dev/)
 [![GitHub tag (latest by date)](https://img.shields.io/github/v/tag/shouni/netarmor)](https://github.com/shouni/netarmor/tags)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go Reference](https://pkg.go.dev/badge/github.com/shouni/netarmor.svg)](https://pkg.go.dev/github.com/shouni/netarmor)
 
-## 💡 概要 (About)
+## 🚀 概要 (About) - 接続直前に IP を検証し、検証済みの IP へ直接つなぐ
 
 **Net Armor** は、Go アプリケーションの外部通信を SSRF (Server-Side Request Forgery) や DNS Rebinding 攻撃から保護するセキュリティライブラリです。**外部依存を持ちません**（`go.mod` の require は空です）。
 
