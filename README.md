@@ -14,7 +14,7 @@
 
 > **v1.4.0 で `retry` パッケージを [go-http-kit](https://github.com/shouni/go-http-kit) へ移しました。** 利用者は import パスを `github.com/shouni/go-http-kit/retry` に変更してください。API は変わっていません。
 
-## ✨ 特徴
+## ✨ 提供機能 (Features)
 
 * **強力な防御 (`securenet`)**: HTTP クライアントの Transport 層で接続直前に IP アドレスを検証し、**検証済み IP に対して直接接続**します。DNS Rebinding 等の TOCTOU 攻撃を遮断します。
 * **型付きエラー**: すべての失敗理由を `errors.Is` / `errors.As` で分類できます。エラーメッセージの文字列比較は不要です。
@@ -31,7 +31,7 @@
 
 ---
 
-## 🚀 クイックスタート
+## 🚦 使い方 (Usage)
 
 ### 1. 安全な HTTP リクエスト (`securenet`)
 
@@ -113,15 +113,9 @@ client := securenet.NewSafeHTTPClient(2*time.Second,
     securenet.WithResolver(myFakeResolver))
 ```
 
-| Option | 用途 |
-| --- | --- |
-| `WithResolver` | 名前解決の差し替え（テスト用） |
-| `WithProxy` / `WithProxyFromEnvironment` | プロキシの明示的な有効化 |
-| `WithAllowedCIDRs` / `WithAllowedPrefixes` | 特定ネットワークの許可（最優先） |
-| `WithBlockedCIDRs` | 追加のブロック範囲 |
-| `WithAllowLoopback` / `WithAllowPrivate` / `WithAllowLinkLocal` | ポリシーの緩和 |
-| `WithBaseTransport` / `WithDialer` | Transport / Dialer の持ち込み |
-| `WithMaxRedirects` / `WithAllowRedirectDowngrade` | リダイレクトポリシー |
+`With...` のオプションは、名前解決の差し替え・プロキシの明示的な有効化・特定ネットワークの
+許可とブロック・ポリシーの緩和・Transport / Dialer の持ち込み・リダイレクトポリシーの
+6 系統です（一覧と個々の意味は godoc）。**許可の指定はブロックより優先されます。**
 
 リダイレクトで失敗した場合も型で判別できます。`http.Client` が返す `*url.Error` の包みは `errors.Is` / `errors.As` が透過します。
 
