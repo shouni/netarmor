@@ -72,7 +72,7 @@ func IsSecureServiceURL(serviceURL string) bool {
 		return false
 	}
 
-	switch strings.ToLower(u.Scheme) {
+	switch u.Scheme { // url.Parse がスキームを小文字化済み
 	case SchemeHTTPS:
 		return true
 	case SchemeHTTP:
@@ -267,11 +267,11 @@ func (o *options) validateURL(ctx context.Context, rawURL string) error {
 		return &URLError{URL: rawURL, Err: err}
 	}
 
-	switch strings.ToLower(parsed.Scheme) {
+	switch parsed.Scheme { // url.Parse がスキームを小文字化済み
 	case SchemeHTTP, SchemeHTTPS:
 		// 検証を続行
 	default:
-		return &SchemeError{Scheme: strings.ToLower(parsed.Scheme)}
+		return &SchemeError{Scheme: parsed.Scheme}
 	}
 
 	hostname := strings.ToLower(parsed.Hostname())
