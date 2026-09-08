@@ -72,7 +72,7 @@ func IsSecureServiceURL(serviceURL string) bool {
 		return false
 	}
 
-	switch strings.ToLower(u.Scheme) {
+	switch u.Scheme { // url.Parse がスキームを小文字化済み
 	case SchemeHTTPS:
 		return true
 	case SchemeHTTP:
@@ -198,9 +198,15 @@ func (o *options) dialContext(dialer *net.Dialer) func(context.Context, string, 
 
 		// 検証済みの IP に対して直接ダイヤルする。ホスト名で再ダイヤルすると
 		// ここで再度名前解決が走り、検証を回避されうる。
+		//
+		// 期限は残りのアドレス数で分けて各試行に割り当てる（net.Dialer と同じ配分）。
+		// 全体の期限をそのまま渡すと、先頭の IP がブラックホールだったときに
+		// そこで使い切り、到達できる 2 つ目の IP が一度も試されない。
 		var lastErr error
-		for _, a := range addrs {
-			conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(a.String(), port))
+		for i, a := range addrs {
+			attemptCtx, cancel := attemptContext(ctx, len(addrs)-i)
+			conn, err := dialer.DialContext(attemptCtx, network, net.JoinHostPort(a.String(), port))
+			cancel()
 			if err == nil {
 				return conn, nil
 			}
@@ -211,6 +217,32 @@ func (o *options) dialContext(dialer *net.Dialer) func(context.Context, string, 
 		}
 		return nil, lastErr
 	}
+}
+
+// attemptContext は、残り addrsRemaining 個のアドレスのうち今回の試行に割り当てる
+// 期限を持つ context を返します。ctx に期限が無ければそのまま返します。
+func attemptContext(ctx context.Context, addrsRemaining int) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return ctx, func() {}
+	}
+	return context.WithDeadline(ctx, partialDeadline(time.Now(), deadline, addrsRemaining))
+}
+
+// partialDeadline は残り時間を未試行のアドレス数で等分した期限を返します。
+// 1 試行あたりが短すぎる場合は saneMinimum まで後ろのアドレスから借ります
+// （net.Dialer の partialDeadline と同じ規則）。
+func partialDeadline(now, deadline time.Time, addrsRemaining int) time.Time {
+	const saneMinimum = 2 * time.Second
+	timeRemaining := deadline.Sub(now)
+	if timeRemaining <= 0 {
+		return now
+	}
+	timeout := timeRemaining / time.Duration(addrsRemaining)
+	if timeout < saneMinimum {
+		timeout = min(timeRemaining, saneMinimum)
+	}
+	return now.Add(timeout)
 }
 
 // checkRedirect はリダイレクト追従の可否を判定します。
@@ -235,11 +267,11 @@ func (o *options) validateURL(ctx context.Context, rawURL string) error {
 		return &URLError{URL: rawURL, Err: err}
 	}
 
-	switch strings.ToLower(parsed.Scheme) {
+	switch parsed.Scheme { // url.Parse がスキームを小文字化済み
 	case SchemeHTTP, SchemeHTTPS:
 		// 検証を続行
 	default:
-		return &SchemeError{Scheme: strings.ToLower(parsed.Scheme)}
+		return &SchemeError{Scheme: parsed.Scheme}
 	}
 
 	hostname := strings.ToLower(parsed.Hostname())
