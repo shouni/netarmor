@@ -605,6 +605,43 @@ func TestNewSafeTransport(t *testing.T) {
 			t.Error("WithDialer で渡した Dialer が使われていません")
 		}
 	})
+
+	t.Run("先頭の IP が応答しなくても次の IP へフォールバックすること", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+		_, port, _ := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+
+		// 192.0.2.1 (TEST-NET-1) をブラックホール役にする。実際にパケットは出さず、
+		// ControlContext で試行の期限まで塞ぐ。期限が試行ごとに切られていなければ
+		// ここで全体の期限を使い切り、127.0.0.1 が試されないまま失敗する。
+		const blackhole = "192.0.2.1"
+		dialer := &net.Dialer{
+			Timeout: 3 * time.Second,
+			ControlContext: func(ctx context.Context, _, address string, _ syscall.RawConn) error {
+				if host, _, _ := net.SplitHostPort(address); host == blackhole {
+					<-ctx.Done()
+					return ctx.Err()
+				}
+				return nil
+			},
+		}
+		client := &http.Client{
+			Transport: securenet.NewSafeTransport(3*time.Second,
+				securenet.WithResolver(fakeResolver{"dualstack.test": {blackhole, "127.0.0.1"}}),
+				securenet.WithAllowedCIDRs("192.0.2.0/24"),
+				securenet.WithAllowLoopback(),
+				securenet.WithDialer(dialer)),
+			Timeout: 3 * time.Second,
+		}
+
+		resp, err := client.Get("http://dualstack.test:" + port + "/")
+		if err != nil {
+			t.Fatalf("2 つ目の IP へフォールバックしませんでした: %v", err)
+		}
+		_ = resp.Body.Close()
+	})
 }
 
 func TestCheckRedirect(t *testing.T) {
