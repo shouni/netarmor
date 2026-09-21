@@ -121,3 +121,39 @@ func FuzzIsSecureServiceURL(f *testing.F) {
 		}
 	})
 }
+
+// FuzzZonedLiteral は、ゾーンを付けても判定が緩まないことを検証します。
+// ゾーン付きの IPv6 リテラルが通るなら、ゾーン無しの同じアドレスも通らなければなりません。
+func FuzzZonedLiteral(f *testing.F) {
+	seeds := []string{
+		"64:ff9b::a9fe:a9fe",
+		"2002:a9fe:a9fe::1",
+		"2001:db8::1",
+		"::ffff:169.254.169.254",
+		"fe80::1",
+		"::1",
+		"2606:4700:4700::1111",
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+
+	ctx := context.Background()
+	opt := securenet.WithResolver(fuzzResolver{})
+
+	f.Fuzz(func(t *testing.T, raw string) {
+		addr, err := netip.ParseAddr(raw)
+		if err != nil || !addr.Is6() || addr.Zone() != "" {
+			return
+		}
+
+		zoned := "http://[" + addr.String() + "%25eth0]/"
+		if securenet.ValidateURL(ctx, zoned, opt) != nil {
+			return
+		}
+		plain := "http://[" + addr.String() + "]/"
+		if err := securenet.ValidateURL(ctx, plain, opt); err != nil {
+			t.Fatalf("ゾーン付きは通ったのに、ゾーン無しは拒否されました: %q: %v", plain, err)
+		}
+	})
+}
