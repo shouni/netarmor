@@ -82,7 +82,11 @@ type policy struct {
 func (p *policy) isRestricted(addr netip.Addr) bool {
 	// IPv4-mapped IPv6 (::ffff:127.0.0.1) を IPv4 に正規化してから判定する。
 	// これを怠ると mapped 形式でプライベート IP 判定を回避されうる。
-	a := addr.Unmap()
+	//
+	// ゾーンも落とす。netip.Prefix.Contains はゾーン付きアドレスに常に false を
+	// 返すため、残したままだと [64:ff9b::a9fe:a9fe%25eth0] のようにゾーンを付ける
+	// だけで blocked の範囲判定を素通りできてしまう。
+	a := addr.Unmap().WithZone("")
 
 	if !a.IsValid() {
 		return true

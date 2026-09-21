@@ -127,6 +127,10 @@ func TestValidateURL(t *testing.T) {
 		{"HTTP_6to4RelayAnycast", "http://192.88.99.1/", securenet.ErrRestrictedIP},
 		{"IPv6_NAT64WellKnown_EmbeddedMetadata", "http://[64:ff9b::a9fe:a9fe]/", securenet.ErrRestrictedIP},
 		{"IPv6_NAT64LocalUse", "http://[64:ff9b:1::1]/", securenet.ErrRestrictedIP},
+		// ゾーンを付けても範囲判定を素通りできないこと。
+		{"IPv6_NAT64WellKnown_Zoned", "http://[64:ff9b::a9fe:a9fe%25eth0]/", securenet.ErrRestrictedIP},
+		{"IPv6_6to4_Zoned", "http://[2002:a9fe:a9fe::1%25eth0]/", securenet.ErrRestrictedIP},
+		{"IPv6_Documentation_Zoned", "http://[2001:db8::1%25x]/", securenet.ErrRestrictedIP},
 		{"IPv6_Teredo", "http://[2001::1]/", securenet.ErrRestrictedIP},
 		{"IPv6_6to4_EmbeddedLoopback", "http://[2002:7f00:1::1]/", securenet.ErrRestrictedIP},
 		{"IPv6_DocumentationExtended", "http://[3fff::1]/", securenet.ErrRestrictedIP},
