@@ -254,7 +254,7 @@ func (o *options) checkRedirect(req *http.Request, via []*http.Request) error {
 	if !o.allowDowngrade && len(via) > 0 {
 		prev := via[len(via)-1]
 		if prev.URL.Scheme == SchemeHTTPS && req.URL.Scheme == SchemeHTTP {
-			return &RedirectDowngradeError{URL: req.URL.Redacted()}
+			return &RedirectDowngradeError{URL: redactURL(req.URL)}
 		}
 	}
 	return nil
@@ -264,7 +264,7 @@ func (o *options) checkRedirect(req *http.Request, via []*http.Request) error {
 func (o *options) validateURL(ctx context.Context, rawURL string) error {
 	parsed, err := url.ParseRequestURI(rawURL)
 	if err != nil {
-		return &URLError{URL: rawURL, Err: err}
+		return &URLError{URL: redactURLString(rawURL), Err: redactParseError(err)}
 	}
 
 	switch parsed.Scheme { // url.Parse がスキームを小文字化済み
@@ -276,7 +276,7 @@ func (o *options) validateURL(ctx context.Context, rawURL string) error {
 
 	hostname := strings.ToLower(parsed.Hostname())
 	if hostname == "" {
-		return fmt.Errorf("%w: %q", ErrEmptyHost, rawURL)
+		return fmt.Errorf("%w: %q", ErrEmptyHost, redactURL(parsed))
 	}
 
 	_, err = o.resolveAndCheck(ctx, hostname)
