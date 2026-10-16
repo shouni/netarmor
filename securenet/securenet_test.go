@@ -850,3 +850,73 @@ func TestErrorMessages(t *testing.T) {
 		}
 	})
 }
+
+// エラーはそのままログに出るので、署名や API キーが乗りうるクエリ・フラグメントと、
+// ユーザー情報のパスワードは、エラーの文面にもフィールドにも残してはいけない。
+func TestErrorsRedactSecrets(t *testing.T) {
+	ctx := context.Background()
+	const secret = "s3cr3t"
+
+	assertRedacted := func(t *testing.T, err error, fields ...string) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("エラーを期待していましたが nil でした")
+		}
+		for _, s := range append([]string{err.Error()}, fields...) {
+			if strings.Contains(s, secret) {
+				t.Errorf("秘密がエラーに残っています: %q", s)
+			}
+		}
+	}
+
+	t.Run("解析できない URL の URLError", func(t *testing.T) {
+		err := securenet.ValidateURL(ctx, "https://user:"+secret+"@public.test/%zz?sig="+secret,
+			securenet.WithResolver(testResolver))
+
+		ue, ok := errors.AsType[*securenet.URLError](err)
+		if !ok {
+			t.Fatalf("*URLError を期待していましたが、異なります: %v", err)
+		}
+		assertRedacted(t, err, ue.URL)
+		if !strings.Contains(ue.URL, "public.test") {
+			t.Errorf("ホストは残すべきです: %q", ue.URL)
+		}
+		if _, ok := errors.AsType[*url.Error](err); !ok {
+			t.Errorf("元の *url.Error を取り出せるべきです: %v", err)
+		}
+	})
+
+	t.Run("ホストが空のエラー", func(t *testing.T) {
+		err := securenet.ValidateURL(ctx, "https:///path?token="+secret+"#"+secret,
+			securenet.WithResolver(testResolver))
+
+		if !errors.Is(err, securenet.ErrEmptyHost) {
+			t.Fatalf("ErrEmptyHost を期待していましたが、異なります: %v", err)
+		}
+		assertRedacted(t, err)
+	})
+
+	t.Run("ダウングレードしたリダイレクト先", func(t *testing.T) {
+		client := securenet.NewSafeHTTPClient(time.Second)
+		next, err := http.NewRequest(http.MethodGet,
+			"http://user:"+secret+"@example.com/next?X-Goog-Signature="+secret+"#"+secret, nil)
+		if err != nil {
+			t.Fatalf("期待しないエラーが発生しました: %v", err)
+		}
+		prev, err := http.NewRequest(http.MethodGet, "https://example.com/", nil)
+		if err != nil {
+			t.Fatalf("期待しないエラーが発生しました: %v", err)
+		}
+
+		err = client.CheckRedirect(next, []*http.Request{prev})
+
+		dg, ok := errors.AsType[*securenet.RedirectDowngradeError](err)
+		if !ok {
+			t.Fatalf("*RedirectDowngradeError を期待していましたが、異なります: %v", err)
+		}
+		assertRedacted(t, err, dg.URL)
+		if want := "http://user:xxxxx@example.com/next?REDACTED"; dg.URL != want {
+			t.Errorf("dg.URL が不正です: 期待 %v, 実績 %v", want, dg.URL)
+		}
+	})
+}

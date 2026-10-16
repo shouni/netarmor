@@ -84,9 +84,11 @@ func (e *ResolveError) Unwrap() error { return e.Err }
 // URLError は、URL のパースに失敗したことを表します。
 // errors.Is(err, ErrInvalidURL) が true になります。
 type URLError struct {
-	// URL はパースに失敗した入力文字列です。
+	// URL はパースに失敗した入力文字列です。エラーはそのままログに出るので、
+	// クエリとフラグメントの値、ユーザー情報は伏せた表現を保持します。
 	URL string
 	// Err は url パッケージが返した元のエラーです。nil の場合もあります。
+	// *url.Error の URL も同じく伏せてあります。
 	Err error
 }
 
@@ -126,7 +128,8 @@ func (e *TooManyRedirectsError) Unwrap() error { return ErrTooManyRedirects }
 // RedirectDowngradeError は、https から http へのリダイレクト追従を拒否したことを表します。
 // errors.Is(err, ErrRedirectDowngrade) が true になります。
 type RedirectDowngradeError struct {
-	// URL はリダイレクト先です。認証情報は伏せ字にした表現を保持します。
+	// URL はリダイレクト先です。パスワードと、クエリとフラグメントの値は
+	// 伏せた表現を保持します（署名付き URL の署名や API キーが乗りうるため）。
 	URL string
 }
 

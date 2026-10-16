@@ -61,6 +61,7 @@ Key invariants to preserve:
 - **fail-closed on multi-address hosts**: one restricted IP rejects the whole connection. Never "pick the safe IP" — resolution order is attacker-influenced.
 - **`defaultOptions` wraps the shared prefix slice in `slices.Clip`** so `WithBlockedCIDRs`' `append` can't mutate the package-level backing array.
 - **IPv4-embedding transition ranges (NAT64 `64:ff9b::/96` + `64:ff9b:1::/48`, 6to4 `2002::/16` + `192.88.99.0/24`, Teredo `2001::/32`) are blocked wholesale**, not by extracting and checking the embedded IPv4 — extraction would interact badly with allowlist semantics and add parsing surface. NAT64 users opt in via `WithAllowedCIDRs` (documented on `defaultBlockedPrefixes`).
+- **A URL that goes into an error goes through `redact.go` first.** Errors end up in logs verbatim, and a query can carry a signed-URL signature or an `?key=` API key, while `url.URL.Redacted` hides only the password. Query and fragment values are dropped (`?REDACTED` keeps the fact one was there); an unparseable input also loses its whole userinfo. `URLError.Err` is a redacted *copy* of the `*url.Error`, which otherwise repeats the raw input. `TestErrorsRedactSecrets` checks that the secret is absent from the message — the one deliberate exception to "don't assert on message text", since the message is exactly what leaks.
 
 ## Conventions
 
