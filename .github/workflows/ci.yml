@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   ci:
-    uses: shouni/workflows/.github/workflows/go-ci.yml@v1
+    uses: shouni/workflows/.github/workflows/go-ci.yml@v1.6.0
     with:
       coverage: true
       upload-coverage: true
