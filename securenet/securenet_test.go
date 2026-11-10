@@ -183,7 +183,7 @@ func TestValidateURL(t *testing.T) {
 func TestValidateURL_ErrorDetails(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("BlockedIPError がホストとアドレスを保持すること", func(t *testing.T) {
+	t.Run("BlockedIPError keeps host and address", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "https://internal.test/api", securenet.WithResolver(testResolver))
 
 		blocked, ok := errors.AsType[*securenet.BlockedIPError](err)
@@ -201,7 +201,7 @@ func TestValidateURL_ErrorDetails(t *testing.T) {
 		}
 	})
 
-	t.Run("SchemeError が拒否されたスキームを保持すること", func(t *testing.T) {
+	t.Run("SchemeError keeps rejected scheme", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "FTP://example.com/file", securenet.WithResolver(testResolver))
 
 		se, ok := errors.AsType[*securenet.SchemeError](err)
@@ -213,7 +213,7 @@ func TestValidateURL_ErrorDetails(t *testing.T) {
 		}
 	})
 
-	t.Run("ResolveError が元のDNSエラーをラップすること", func(t *testing.T) {
+	t.Run("ResolveError wraps original DNS error", func(t *testing.T) {
 		dnsErr := &net.DNSError{Err: "server misbehaving", Name: "broken.test"}
 		err := securenet.ValidateURL(ctx, "https://broken.test/api",
 			securenet.WithResolver(errResolver{err: dnsErr}))
@@ -230,7 +230,7 @@ func TestValidateURL_ErrorDetails(t *testing.T) {
 		}
 	})
 
-	t.Run("解決結果が空の場合に ErrNoAddresses になること", func(t *testing.T) {
+	t.Run("empty resolution yields ErrNoAddresses", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "https://empty.test/api",
 			securenet.WithResolver(emptyResolver{}))
 
@@ -239,7 +239,7 @@ func TestValidateURL_ErrorDetails(t *testing.T) {
 		}
 	})
 
-	t.Run("URLError が元のパースエラーをラップすること", func(t *testing.T) {
+	t.Run("URLError wraps original parse error", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "://invalid", securenet.WithResolver(testResolver))
 
 		ue, ok := errors.AsType[*securenet.URLError](err)
@@ -254,7 +254,7 @@ func TestValidateURL_ErrorDetails(t *testing.T) {
 		}
 	})
 
-	t.Run("キャンセル済み context が伝播すること", func(t *testing.T) {
+	t.Run("canceled context propagates", func(t *testing.T) {
 		canceled, cancel := context.WithCancel(context.Background())
 		cancel()
 
@@ -270,7 +270,7 @@ func TestValidateURL_ErrorDetails(t *testing.T) {
 func TestValidateURL_PolicyOptions(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("WithAllowLoopback でループバックが許可されること", func(t *testing.T) {
+	t.Run("WithAllowLoopback allows loopback", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "http://127.0.0.1:8080/admin",
 			securenet.WithResolver(testResolver), securenet.WithAllowLoopback())
 		if err != nil {
@@ -278,7 +278,7 @@ func TestValidateURL_PolicyOptions(t *testing.T) {
 		}
 	})
 
-	t.Run("WithAllowPrivate でプライベートIPが許可されること", func(t *testing.T) {
+	t.Run("WithAllowPrivate allows private IPs", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "https://internal.test/api",
 			securenet.WithResolver(testResolver), securenet.WithAllowPrivate())
 		if err != nil {
@@ -286,7 +286,7 @@ func TestValidateURL_PolicyOptions(t *testing.T) {
 		}
 	})
 
-	t.Run("WithAllowedCIDRs が個別のネットワークだけを許可すること", func(t *testing.T) {
+	t.Run("WithAllowedCIDRs allows only listed networks", func(t *testing.T) {
 		opts := []securenet.Option{
 			securenet.WithResolver(testResolver),
 			securenet.WithAllowedCIDRs("10.0.0.0/8"),
@@ -301,7 +301,7 @@ func TestValidateURL_PolicyOptions(t *testing.T) {
 		}
 	})
 
-	t.Run("WithAllowedPrefixes が WithAllowedCIDRs と等価であること", func(t *testing.T) {
+	t.Run("WithAllowedPrefixes equals WithAllowedCIDRs", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "https://internal.test/api",
 			securenet.WithResolver(testResolver),
 			securenet.WithAllowedPrefixes(netip.MustParsePrefix("10.0.0.0/8")))
@@ -310,7 +310,7 @@ func TestValidateURL_PolicyOptions(t *testing.T) {
 		}
 	})
 
-	t.Run("WithBlockedCIDRs で公開IPを追加ブロックできること", func(t *testing.T) {
+	t.Run("WithBlockedCIDRs blocks extra public IPs", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "https://example.com/api",
 			securenet.WithResolver(testResolver),
 			securenet.WithBlockedCIDRs("93.184.216.0/24"))
@@ -319,7 +319,7 @@ func TestValidateURL_PolicyOptions(t *testing.T) {
 		}
 	})
 
-	t.Run("WithBlockedCIDRs が既定リストを破壊しないこと", func(t *testing.T) {
+	t.Run("WithBlockedCIDRs keeps default list intact", func(t *testing.T) {
 		// Even after an option that adds a block has been used once,
 		// the default policy of another call must not be polluted.
 		_ = securenet.ValidateURL(ctx, "https://example.com/api",
@@ -333,7 +333,7 @@ func TestValidateURL_PolicyOptions(t *testing.T) {
 		}
 	})
 
-	t.Run("不正なCIDR表記は無視されること", func(t *testing.T) {
+	t.Run("invalid CIDR is ignored", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "https://internal.test/api",
 			securenet.WithResolver(testResolver),
 			securenet.WithAllowedCIDRs("not-a-cidr", "10.0.0.0/8"))
@@ -342,7 +342,7 @@ func TestValidateURL_PolicyOptions(t *testing.T) {
 		}
 	})
 
-	t.Run("WithAllowLinkLocal でメタデータエンドポイントが許可されること", func(t *testing.T) {
+	t.Run("WithAllowLinkLocal allows metadata endpoint", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "http://169.254.169.254/latest/meta-data/",
 			securenet.WithResolver(testResolver), securenet.WithAllowLinkLocal())
 		if err != nil {
@@ -388,7 +388,7 @@ func TestNewSafeHTTPClient(t *testing.T) {
 		}
 	})
 
-	t.Run("WithProxyFromEnvironment で明示的に有効化できること", func(t *testing.T) {
+	t.Run("WithProxyFromEnvironment enables proxy", func(t *testing.T) {
 		client := securenet.NewSafeHTTPClient(2*time.Second, securenet.WithProxyFromEnvironment())
 		transport, ok := client.Transport.(*http.Transport)
 		if !ok {
@@ -417,7 +417,7 @@ func TestNewSafeHTTPClient(t *testing.T) {
 		}
 	})
 
-	t.Run("WithAllowLoopback でローカルサーバに接続できること", func(t *testing.T) {
+	t.Run("WithAllowLoopback connects to local server", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
@@ -485,7 +485,7 @@ func TestNewSafeHTTPClient(t *testing.T) {
 }
 
 func TestNewSafeTransport(t *testing.T) {
-	t.Run("Transport 単体を取得できること", func(t *testing.T) {
+	t.Run("Transport alone", func(t *testing.T) {
 		transport := securenet.NewSafeTransport(2*time.Second, securenet.WithAllowLoopback())
 
 		if transport == nil {
@@ -515,7 +515,7 @@ func TestNewSafeTransport(t *testing.T) {
 		}
 	})
 
-	t.Run("WithBaseTransport の設定が引き継がれること", func(t *testing.T) {
+	t.Run("WithBaseTransport settings carry over", func(t *testing.T) {
 		base := http.DefaultTransport.(*http.Transport).Clone()
 		base.MaxIdleConnsPerHost = 42
 		base.DisableCompression = true
@@ -537,7 +537,7 @@ func TestNewSafeTransport(t *testing.T) {
 		}
 	})
 
-	t.Run("WithBaseTransport の DialTLSContext は無効化されること", func(t *testing.T) {
+	t.Run("WithBaseTransport DialTLSContext is disabled", func(t *testing.T) {
 		// If DialTLSContext survives, HTTPS never calls DialContext
 		// and IP validation is bypassed entirely.
 		base := &http.Transport{
@@ -563,7 +563,7 @@ func TestNewSafeTransport(t *testing.T) {
 		}
 	})
 
-	t.Run("http.DefaultTransport が差し替えられていても panic しないこと", func(t *testing.T) {
+	t.Run("replaced http.DefaultTransport does not panic", func(t *testing.T) {
 		// Instrumentation libraries and the like may replace the global DefaultTransport.
 		orig := http.DefaultTransport
 		http.DefaultTransport = stubRoundTripper{}
@@ -579,7 +579,7 @@ func TestNewSafeTransport(t *testing.T) {
 		}
 	})
 
-	t.Run("WithDialer が使用されること", func(t *testing.T) {
+	t.Run("WithDialer is used", func(t *testing.T) {
 		called := false
 		dialer := &net.Dialer{
 			Timeout: time.Second,
@@ -610,7 +610,7 @@ func TestNewSafeTransport(t *testing.T) {
 		}
 	})
 
-	t.Run("先頭の IP が応答しなくても次の IP へフォールバックすること", func(t *testing.T) {
+	t.Run("falls back to next IP when first is unresponsive", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
@@ -658,7 +658,7 @@ func TestCheckRedirect(t *testing.T) {
 		return req
 	}
 
-	t.Run("https から http へのダウングレードを拒否すること", func(t *testing.T) {
+	t.Run("rejects https to http downgrade", func(t *testing.T) {
 		client := securenet.NewSafeHTTPClient(time.Second)
 
 		err := client.CheckRedirect(newReq("http://example.com/next"),
@@ -679,7 +679,7 @@ func TestCheckRedirect(t *testing.T) {
 		}
 	})
 
-	t.Run("WithAllowRedirectDowngrade で許可できること", func(t *testing.T) {
+	t.Run("WithAllowRedirectDowngrade allows downgrade", func(t *testing.T) {
 		client := securenet.NewSafeHTTPClient(time.Second, securenet.WithAllowRedirectDowngrade())
 
 		err := client.CheckRedirect(newReq("http://example.com/next"),
@@ -690,7 +690,7 @@ func TestCheckRedirect(t *testing.T) {
 		}
 	})
 
-	t.Run("同一スキームのリダイレクトは許可されること", func(t *testing.T) {
+	t.Run("same-scheme redirect is allowed", func(t *testing.T) {
 		client := securenet.NewSafeHTTPClient(time.Second)
 
 		err := client.CheckRedirect(newReq("https://other.example/next"),
@@ -701,7 +701,7 @@ func TestCheckRedirect(t *testing.T) {
 		}
 	})
 
-	t.Run("最大リダイレクト回数を超えると停止すること", func(t *testing.T) {
+	t.Run("stops after max redirects", func(t *testing.T) {
 		client := securenet.NewSafeHTTPClient(time.Second)
 
 		via := make([]*http.Request, 11)
@@ -722,7 +722,7 @@ func TestCheckRedirect(t *testing.T) {
 		}
 	})
 
-	t.Run("WithMaxRedirects(0) でリダイレクトを禁止できること", func(t *testing.T) {
+	t.Run("WithMaxRedirects(0) forbids redirects", func(t *testing.T) {
 		client := securenet.NewSafeHTTPClient(time.Second, securenet.WithMaxRedirects(0))
 
 		err := client.CheckRedirect(newReq("https://example.com/next"),
@@ -736,7 +736,7 @@ func TestCheckRedirect(t *testing.T) {
 		}
 	})
 
-	t.Run("クライアント経由でも url.Error 越しに分類できること", func(t *testing.T) {
+	t.Run("classifies through url.Error via client", func(t *testing.T) {
 		// http.Client wraps CheckRedirect's error in a *url.Error.
 		// Check that errors.Is / errors.As see through that wrapper.
 		var loop *httptest.Server
@@ -768,7 +768,7 @@ func TestCheckRedirect(t *testing.T) {
 		}
 	})
 
-	t.Run("実際のリダイレクトを追従できること", func(t *testing.T) {
+	t.Run("follows real redirect", func(t *testing.T) {
 		final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
@@ -871,7 +871,7 @@ func TestErrorsRedactSecrets(t *testing.T) {
 		}
 	}
 
-	t.Run("解析できない URL の URLError", func(t *testing.T) {
+	t.Run("URLError for unparsable URL", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "https://user:"+secret+"@public.test/%zz?sig="+secret,
 			securenet.WithResolver(testResolver))
 
@@ -888,7 +888,7 @@ func TestErrorsRedactSecrets(t *testing.T) {
 		}
 	})
 
-	t.Run("ホストが空のエラー", func(t *testing.T) {
+	t.Run("empty host error", func(t *testing.T) {
 		err := securenet.ValidateURL(ctx, "https:///path?token="+secret+"#"+secret,
 			securenet.WithResolver(testResolver))
 
@@ -898,7 +898,7 @@ func TestErrorsRedactSecrets(t *testing.T) {
 		assertRedacted(t, err)
 	})
 
-	t.Run("ダウングレードしたリダイレクト先", func(t *testing.T) {
+	t.Run("downgraded redirect target", func(t *testing.T) {
 		client := securenet.NewSafeHTTPClient(time.Second)
 		next, err := http.NewRequest(http.MethodGet,
 			"http://user:"+secret+"@example.com/next?X-Goog-Signature="+secret+"#"+secret, nil)

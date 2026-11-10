@@ -25,7 +25,7 @@ go vet ./...
 go test -race ./...            # CI runs the race detector
 test -z "$(gofmt -l .)"        # CI fails on unformatted files
 
-# Single test / subtest (subtest names are Japanese; quote them)
+# Single test / subtest (spaces in subtest names become underscores)
 go test ./securenet -run TestValidateURL
 go test ./securenet -run 'TestNewSafeHTTPClient/BlockLoopbackConnection'
 
@@ -66,7 +66,7 @@ Key invariants to preserve:
 ## Conventions
 
 - **Comments, doc comments, error strings, log/panic messages and test assertion messages are English** (moved 2026-11-10; do not mix Japanese back in). Error strings are lowercase, with no trailing punctuation and a `package: detail` prefix, following Go convention for a published library. Consumers classify with `errors.Is`/`errors.As`, and tests must not assert on message substrings.
-- **Test subtest names stay Japanese** for now (renaming them would change `-run` patterns); they are names, not prose.
+- **Test subtest names are English too** (moved 2026-11-10). Go reports spaces as underscores, and `-run` matches that form (`-run TestRedactURLString/no_query`).
 - **`README.md` is English and `README.ja.md` is its Japanese version; update them together.** `SECURITY.md` is English only.
 - The test package is **external** (`securenet_test`) — black-box only. If something needs internal access, prefer exposing it properly over switching the package.
 - **`securenet` tests are hermetic**: every path that resolves a name injects `WithResolver(...)`. IP-literal hosts skip the resolver entirely (`resolveAndCheck` parses them directly), which is why the `httptest` cases work without one. Never add a test that hits real DNS.
