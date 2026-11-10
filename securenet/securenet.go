@@ -1,30 +1,31 @@
-// Package securenet は、SSRF (Server-Side Request Forgery) 対策として、
-// URL のスキーム検証や DNS Rebinding 対策済みの HTTP クライアント生成を行うユーティリティを提供します。
+// Package securenet provides SSRF (Server-Side Request Forgery) protection: URL scheme
+// validation and HTTP clients hardened against DNS rebinding.
 //
-// # 二段構えの防御
+// # Two layers of defense
 //
-// 本パッケージは目的の異なる 2 つの検証層を提供します。両方を併用してください。
+// The package provides two validation layers with different purposes. Use both.
 //
-//  1. 静的検証 (ValidateURL): リクエストを発行する前に URL を弾くための事前チェックです。
-//     ユーザー入力を受け付けた時点で早期にエラーを返す用途に向いています。
-//  2. 接続時検証 (NewSafeHTTPClient / NewSafeTransport): DNS Rebinding のような
-//     TOCTOU 攻撃に対する本体の防御です。接続を確立する直前に名前解決を行い、
-//     検証済みの IP アドレスに対して直接ダイヤルします。
+//  1. Static validation (ValidateURL): a pre-check that rejects a URL before any request
+//     is sent. It suits returning an error early, as soon as user input is accepted.
+//  2. Connect-time validation (NewSafeHTTPClient / NewSafeTransport): the real defense
+//     against TOCTOU attacks such as DNS rebinding. It resolves the name right before
+//     the connection is established and dials the validated IP address directly.
 //
-// 静的検証だけでは、検証後・接続前に DNS 応答が差し替えられる攻撃を防げません。
-// 権威ある防御は常に接続時検証の側にあります。
+// Static validation alone cannot stop an attack that swaps the DNS answer after the
+// check and before the connection. The authoritative defense is always connect-time
+// validation.
 //
-// # fail-closed 方針
+// # Failing closed
 //
-// ホスト名が複数の IP アドレスに解決される場合、そのうち 1 つでも制限対象で
-// あれば接続全体を拒否します。「安全な IP だけを選んで接続する」方式は、
-// 攻撃者が解決順序を操作できる状況で回避されうるため採用していません。
+// When a hostname resolves to several IP addresses, the whole connection is rejected
+// if any one of them is restricted. Connecting only to the "safe" addresses is not
+// done, because it can be bypassed whenever an attacker can influence resolution order.
 //
-// # プロキシ
+// # Proxies
 //
-// 生成されるクライアントは既定で HTTP_PROXY / HTTPS_PROXY を使用しません。
-// 環境変数経由で IP 検証を迂回されることを防ぐためです。
-// 明示的に有効化するには WithProxy または WithProxyFromEnvironment を使用してください。
+// The clients do not use HTTP_PROXY / HTTPS_PROXY by default, so that environment
+// variables cannot be used to route around IP validation. To enable a proxy
+// explicitly, use WithProxy or WithProxyFromEnvironment.
 package securenet
 
 import (
@@ -39,15 +40,15 @@ import (
 )
 
 const (
-	// SchemeHTTP は平文 HTTP スキームを表します。
-	// IsSecureServiceURL ではローカル開発ホスト名との組み合わせでのみ許可されます
-	// （ValidateURL と接続時検証では制限対象でないホストへの http は許可されます）。
+	// SchemeHTTP is the plaintext HTTP scheme.
+	// IsSecureServiceURL allows it only together with a local development hostname
+	// (ValidateURL and connect-time validation allow http to any unrestricted host).
 	SchemeHTTP = "http"
-	// SchemeHTTPS は暗号化された HTTPS スキームを表します。
+	// SchemeHTTPS is the encrypted HTTPS scheme.
 	SchemeHTTPS = "https"
 )
 
-// localdevHostnames は、ローカル開発環境で一般的に使用されるホスト名のセットです。
+// localdevHostnames is the set of hostnames commonly used for local development.
 var localdevHostnames = map[string]struct{}{
 	"localhost":            {},
 	"127.0.0.1":            {},
@@ -55,12 +56,12 @@ var localdevHostnames = map[string]struct{}{
 	"host.docker.internal": {},
 }
 
-// IsSecureServiceURL は、提供されたサービス URL が安全なスキームを使用しているか、
-// ローカル開発ホスト名と一致しているかを確認します。
+// IsSecureServiceURL reports whether the given service URL uses a secure scheme or
+// matches a local development hostname.
 //
-// これは設定値の妥当性を判定するための軽量なチェックであり、名前解決を行いません。
-// 「その URL を実際に取得して安全か」を判定するものではないため、
-// 外部から与えられた URL を検証する用途には ValidateURL を使用してください。
+// It is a lightweight sanity check for configuration values and does no name
+// resolution. It does not answer "is it safe to actually fetch this URL", so use
+// ValidateURL to validate URLs supplied from outside.
 func IsSecureServiceURL(serviceURL string) bool {
 	u, err := url.ParseRequestURI(serviceURL)
 	if err != nil {
@@ -72,7 +73,7 @@ func IsSecureServiceURL(serviceURL string) bool {
 		return false
 	}
 
-	switch u.Scheme { // url.Parse がスキームを小文字化済み
+	switch u.Scheme { // url.Parse has already lowercased the scheme
 	case SchemeHTTPS:
 		return true
 	case SchemeHTTP:
@@ -82,49 +83,50 @@ func IsSecureServiceURL(serviceURL string) bool {
 	}
 }
 
-// ValidateURL は、SSRF 攻撃を防ぐために URL の静的検証を行います。
-// 安全と判断された場合は nil を、そうでない場合は失敗理由を表すエラーを返します。
+// ValidateURL statically validates a URL to prevent SSRF attacks.
+// It returns nil when the URL is judged safe, and otherwise an error describing why not.
 //
-// 返されるエラーは errors.Is / errors.As で分類できます。
+// The returned error can be classified with errors.Is / errors.As.
 //
 //	err := securenet.ValidateURL(ctx, rawURL)
 //	switch {
 //	case errors.Is(err, securenet.ErrRestrictedIP):
-//		// 制限されたネットワークへのアクセス
+//		// access to a restricted network
 //	case errors.Is(err, securenet.ErrDisallowedScheme):
-//		// 許可されていないスキーム
+//		// disallowed scheme
 //	}
 //
-// 許可されるスキームは http と https だけです。それ以外はすべて
-// ErrDisallowedScheme になります。
+// Only the http and https schemes are allowed. Every other scheme is
+// ErrDisallowedScheme.
 //
-// 名前解決のタイムアウトは ctx で制御してください。本関数は独自のタイムアウトを設定しません。
+// Control the name-resolution timeout through ctx. This function sets no timeout of its own.
 func ValidateURL(ctx context.Context, rawURL string, opts ...Option) error {
 	return newOptions(opts).validateURL(ctx, rawURL)
 }
 
-// NewSafeTransport は、接続直前に IP 検証を行う *http.Transport を生成します。
+// NewSafeTransport returns an *http.Transport that validates the IP right before connecting.
 //
-// 独自の *http.Client（cookiejar や計装付き）を構築したい場合に使用してください。
-// 単に安全なクライアントが欲しい場合は NewSafeHTTPClient を使用します。
+// Use it to build your own *http.Client (with a cookie jar or instrumentation).
+// If you just want a safe client, use NewSafeHTTPClient.
 //
-// リダイレクトポリシー (WithMaxRedirects / WithAllowRedirectDowngrade) は
-// *http.Client.CheckRedirect 側の機能のため、返される Transport には含まれません。
-// 自前で *http.Client を組むとこれらのオプションは無視され、Go 既定の挙動
-// （10 回まで追従し、https から http へのダウングレードも制限しない）になります。
-// リダイレクトの制御が必要な場合は NewSafeHTTPClient を使用してください。
+// The redirect policy (WithMaxRedirects / WithAllowRedirectDowngrade) is a feature of
+// *http.Client.CheckRedirect, so the returned Transport does not include it. With an
+// *http.Client of your own, those options are ignored and Go's default behavior applies
+// (up to 10 redirects, with no restriction on https-to-http downgrades).
+// If you need redirect control, use NewSafeHTTPClient.
 func NewSafeTransport(timeout time.Duration, opts ...Option) *http.Transport {
 	return newOptions(opts).newTransport(timeout)
 }
 
-// NewSafeHTTPClient は、接続直前に IP 検証を行うことで DNS Rebinding を防ぐクライアントを生成します。
+// NewSafeHTTPClient returns a client that prevents DNS rebinding by validating the IP
+// right before connecting.
 //
-// 既定では以下のポリシーが適用されます。
-//   - プライベート / ループバック / リンクローカル等への接続を拒否
-//   - 環境変数によるプロキシを無効化
-//   - リダイレクト追従は最大 10 回、https から http へのダウングレードは拒否
+// By default the following policy applies:
+//   - connections to private, loopback, link-local and similar addresses are refused
+//   - proxies from environment variables are disabled
+//   - at most 10 redirects are followed, and https-to-http downgrades are refused
 //
-// これらは Option で調整できます。
+// Each of these can be adjusted with an Option.
 func NewSafeHTTPClient(timeout time.Duration, opts ...Option) *http.Client {
 	o := newOptions(opts)
 	return &http.Client{
@@ -134,33 +136,34 @@ func NewSafeHTTPClient(timeout time.Duration, opts ...Option) *http.Client {
 	}
 }
 
-// newTransport は options から検証付き Transport を生成します。
+// newTransport builds a validating Transport from the options.
 func (o *options) newTransport(timeout time.Duration) *http.Transport {
 	transport := o.cloneBaseTransport()
 	transport.Proxy = o.proxy
 	transport.DialContext = o.dialContext(o.newDialer(timeout))
 
-	// DialTLSContext が設定されていると、HTTPS では DialContext が呼ばれず
-	// IP 検証が丸ごと迂回される（net/http の仕様）。安全側に倒して無効化する。
+	// With DialTLSContext set, HTTPS never calls DialContext and IP validation is
+	// bypassed entirely (net/http behavior). Disable it to stay on the safe side.
 	//
-	// 非推奨の DialTLS / Dial も落とす。DialTLS は DialTLSContext が nil のときの
-	// フォールバックとして net/http の customDialTLS で現役のため、消さないと穴が残る。
-	// Dial は DialContext を必ず設定するので到達しないが、多層防御として揃えておく。
+	// Drop the deprecated DialTLS / Dial too. DialTLS is still live in net/http's
+	// customDialTLS as the fallback when DialTLSContext is nil, so leaving it would
+	// leave a hole. Dial is never reached because DialContext is always set, but it is
+	// cleared as well for defense in depth.
 	transport.DialTLSContext = nil
-	transport.DialTLS = nil //nolint:staticcheck // 使うためではなく、検証を迂回されないよう無効化するための代入
-	transport.Dial = nil    //nolint:staticcheck // 同上
+	transport.DialTLS = nil //nolint:staticcheck // assigned to disable it so validation cannot be bypassed, not to use it
+	transport.Dial = nil    //nolint:staticcheck // same as above
 
 	return transport
 }
 
-// cloneBaseTransport は複製元の Transport を決定して複製します。
+// cloneBaseTransport picks the Transport to clone from and clones it.
 func (o *options) cloneBaseTransport() *http.Transport {
 	if o.baseTransport != nil {
 		return o.baseTransport.Clone()
 	}
-	// http.DefaultTransport は計装ライブラリ等にグローバルで差し替えられている
-	// ことがある。型アサーションで panic しないよう、*http.Transport でなければ
-	// 標準と同等の既定値から組み立てる。
+	// http.DefaultTransport may have been replaced globally, for example by an
+	// instrumentation library. So that the type assertion cannot panic, build from
+	// defaults equivalent to the standard ones when it is not an *http.Transport.
 	if dt, ok := http.DefaultTransport.(*http.Transport); ok {
 		return dt.Clone()
 	}
@@ -173,12 +176,12 @@ func (o *options) cloneBaseTransport() *http.Transport {
 	}
 }
 
-// dialContext は、接続直前に名前解決と IP 検証を行うダイヤル関数を返します。
+// dialContext returns a dial function that resolves the name and validates the IP right before connecting.
 func (o *options) dialContext(dialer *net.Dialer) func(context.Context, string, string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		// net.Dialer.Timeout は DialContext 1 回ごとに適用されるため、解決した
-		// アドレスごとに呼ぶと合計で「アドレス数 × timeout」まで伸びうる。
-		// 標準の net.Dialer と同じく、名前解決を含む 1 回のダイヤル全体を上限とする。
+		// net.Dialer.Timeout applies per DialContext call, so calling it once per
+		// resolved address could stretch the total to "number of addresses x timeout".
+		// As with the standard net.Dialer, bound the whole dial, name resolution included.
 		if dialer.Timeout > 0 {
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, dialer.Timeout)
@@ -190,18 +193,19 @@ func (o *options) dialContext(dialer *net.Dialer) func(context.Context, string, 
 			return nil, fmt.Errorf("securenet: split host port %q: %w", addr, err)
 		}
 
-		// 接続直前に名前解決を行い、解決された IP を即座に検証する (TOCTOU 対策)
+		// Resolve right before connecting and validate the resolved IPs at once (TOCTOU defense)
 		addrs, err := o.resolveAndCheck(ctx, host)
 		if err != nil {
 			return nil, err
 		}
 
-		// 検証済みの IP に対して直接ダイヤルする。ホスト名で再ダイヤルすると
-		// ここで再度名前解決が走り、検証を回避されうる。
+		// Dial the validated IPs directly. Re-dialing by hostname would resolve the
+		// name again here, and validation could be bypassed.
 		//
-		// 期限は残りのアドレス数で分けて各試行に割り当てる（net.Dialer と同じ配分）。
-		// 全体の期限をそのまま渡すと、先頭の IP がブラックホールだったときに
-		// そこで使い切り、到達できる 2 つ目の IP が一度も試されない。
+		// The deadline is split across the remaining addresses for each attempt (the
+		// same split as net.Dialer). Passing the whole deadline as is would let a
+		// black-holed first IP use it all up, and a reachable second IP would never
+		// be tried.
 		var lastErr error
 		for i, a := range addrs {
 			attemptCtx, cancel := attemptContext(ctx, len(addrs)-i)
@@ -219,8 +223,8 @@ func (o *options) dialContext(dialer *net.Dialer) func(context.Context, string, 
 	}
 }
 
-// attemptContext は、残り addrsRemaining 個のアドレスのうち今回の試行に割り当てる
-// 期限を持つ context を返します。ctx に期限が無ければそのまま返します。
+// attemptContext returns a context whose deadline is this attempt's share among the
+// addrsRemaining addresses left. If ctx has no deadline, it is returned as is.
 func attemptContext(ctx context.Context, addrsRemaining int) (context.Context, context.CancelFunc) {
 	deadline, ok := ctx.Deadline()
 	if !ok {
@@ -229,9 +233,9 @@ func attemptContext(ctx context.Context, addrsRemaining int) (context.Context, c
 	return context.WithDeadline(ctx, partialDeadline(time.Now(), deadline, addrsRemaining))
 }
 
-// partialDeadline は残り時間を未試行のアドレス数で等分した期限を返します。
-// 1 試行あたりが短すぎる場合は saneMinimum まで後ろのアドレスから借ります
-// （net.Dialer の partialDeadline と同じ規則）。
+// partialDeadline returns a deadline that divides the remaining time evenly among the
+// addresses not yet tried. When a single attempt's share is too short, it borrows from
+// the later addresses up to saneMinimum (the same rule as net.Dialer's partialDeadline).
 func partialDeadline(now, deadline time.Time, addrsRemaining int) time.Time {
 	const saneMinimum = 2 * time.Second
 	timeRemaining := deadline.Sub(now)
@@ -245,8 +249,8 @@ func partialDeadline(now, deadline time.Time, addrsRemaining int) time.Time {
 	return now.Add(timeout)
 }
 
-// checkRedirect はリダイレクト追従の可否を判定します。
-// 返すエラーは errors.Is で ErrTooManyRedirects / ErrRedirectDowngrade と比較できます。
+// checkRedirect decides whether a redirect may be followed.
+// Its errors can be compared with ErrTooManyRedirects / ErrRedirectDowngrade using errors.Is.
 func (o *options) checkRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) > o.maxRedirects {
 		return &TooManyRedirectsError{Max: o.maxRedirects}
@@ -260,16 +264,16 @@ func (o *options) checkRedirect(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-// validateURL は URL のスキームとホスト名を検証します。
+// validateURL validates the URL's scheme and hostname.
 func (o *options) validateURL(ctx context.Context, rawURL string) error {
 	parsed, err := url.ParseRequestURI(rawURL)
 	if err != nil {
 		return &URLError{URL: redactURLString(rawURL), Err: redactParseError(err)}
 	}
 
-	switch parsed.Scheme { // url.Parse がスキームを小文字化済み
+	switch parsed.Scheme { // url.Parse has already lowercased the scheme
 	case SchemeHTTP, SchemeHTTPS:
-		// 検証を続行
+		// continue validating
 	default:
 		return &SchemeError{Scheme: parsed.Scheme}
 	}
@@ -283,10 +287,10 @@ func (o *options) validateURL(ctx context.Context, rawURL string) error {
 	return err
 }
 
-// resolveAndCheck はホスト名を解決し、すべての結果がポリシー上許可されることを確認します。
-// 1 つでも制限対象が含まれる場合は fail-closed でエラーを返します。
+// resolveAndCheck resolves the hostname and checks that every result is allowed by the policy.
+// If any one of them is restricted, it fails closed and returns an error.
 func (o *options) resolveAndCheck(ctx context.Context, host string) ([]netip.Addr, error) {
-	// IP リテラルはリゾルバを介さずに直接検証する。
+	// IP literals are validated directly, without the resolver.
 	if a, err := netip.ParseAddr(host); err == nil {
 		if o.policy.isRestricted(a) {
 			return nil, &BlockedIPError{Host: host, Addr: a}
@@ -310,7 +314,7 @@ func (o *options) resolveAndCheck(ctx context.Context, host string) ([]netip.Add
 	return addrs, nil
 }
 
-// isLocalDevHostname は、指定されたホスト名が既知のローカル開発ホスト名と一致するかどうかを確認します。
+// isLocalDevHostname reports whether hostname matches a known local development hostname.
 func isLocalDevHostname(hostname string) bool {
 	_, ok := localdevHostnames[hostname]
 	return ok

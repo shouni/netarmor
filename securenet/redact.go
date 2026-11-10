@@ -5,19 +5,19 @@ import (
 	"strings"
 )
 
-// redactedQuery は、伏せたクエリの代わりに置く値です。クエリが付いていたことだけを残します。
+// redactedQuery replaces a redacted query. It keeps only the fact that a query was present.
 const redactedQuery = "REDACTED"
 
-// redactedUserinfo は、解析できない URL のユーザー情報の代わりに置く値です。
-// url.URL.Redacted がパスワードに使う表記に揃えています。
+// redactedUserinfo replaces the userinfo of a URL that cannot be parsed.
+// It matches the placeholder url.URL.Redacted uses for passwords.
 const redactedUserinfo = "xxxxx"
 
-// redactURL は、エラーに載せる URL の文字列を返します。
+// redactURL returns the URL string to put in an error.
 //
-// エラーはそのままログに出ます。クエリには署名付き URL の署名や `?key=` の API キーが
-// 乗ることがあり、url.URL.Redacted が伏せるのはユーザー情報のパスワードだけです。
-// そこでクエリとフラグメントは値を落とし、付いていたことだけを残します。
-// どこへの接続を拒否したかを追うには、スキーム・ホスト・パスで足ります。
+// Errors end up in logs verbatim. A query can carry a signed URL's signature or a
+// `?key=` API key, while url.URL.Redacted hides only the userinfo password. So the
+// query and fragment values are dropped, keeping only the fact they were present.
+// Scheme, host and path are enough to trace which connection was refused.
 func redactURL(u *url.URL) string {
 	if u == nil {
 		return ""
@@ -31,11 +31,12 @@ func redactURL(u *url.URL) string {
 	return c.Redacted()
 }
 
-// redactURLString は redactURL の文字列版です。
+// redactURLString is the string version of redactURL.
 //
-// 解析できない入力は URLError に載るので、ここが主な使い道です。その場合も、
-// `?` / `#` 以降は秘密を含みうるので切り落とし、`://` の後ろのオーソリティに `@` が
-// あればユーザー情報ごと伏せます（パスワードだけを見分ける手がかりがないため）。
+// Its main use is input that cannot be parsed, which ends up in a URLError. Even then,
+// everything from `?` / `#` on may hold secrets and is cut off, and if the authority
+// after `://` contains `@`, the whole userinfo is redacted (there is nothing to tell
+// the password apart by).
 func redactURLString(raw string) string {
 	if u, err := url.Parse(raw); err == nil {
 		return redactURL(u)
@@ -60,11 +61,12 @@ func redactURLString(raw string) string {
 	return s + suffix
 }
 
-// redactParseError は、url パッケージの解析エラーから入力文字列を伏せた写しを返します。
+// redactParseError returns a copy of a url package parse error with the input redacted.
 //
-// url.Parse / url.ParseRequestURI の失敗は *url.Error で、入力をそのまま抱えています。
-// URLError の URL を伏せても、元のエラーの文面にそのまま出てしまいます。写しを作って
-// 差し替えるので、errors.As で *url.Error を取り出す使い方は変わりません。
+// A failure from url.Parse / url.ParseRequestURI is a *url.Error that holds the raw
+// input. Redacting URLError's URL alone would still leave it in the original error's
+// text. Because a copy is substituted, extracting the *url.Error with errors.As
+// works as before.
 func redactParseError(err error) error {
 	ue, ok := err.(*url.Error)
 	if !ok || ue == nil {

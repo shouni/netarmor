@@ -10,8 +10,8 @@ import (
 	"github.com/shouni/netarmor/securenet"
 )
 
-// fuzzResolver は fuzz 中に実 DNS を引かないための固定リゾルバです。
-// 既知のホストだけ公開 IP を返し、それ以外は解決失敗させます。
+// fuzzResolver is a fixed resolver that keeps fuzzing off real DNS.
+// It returns a public IP for the known host only and fails every other lookup.
 type fuzzResolver struct{}
 
 func (fuzzResolver) LookupNetIP(_ context.Context, _, host string) ([]netip.Addr, error) {
@@ -21,8 +21,8 @@ func (fuzzResolver) LookupNetIP(_ context.Context, _, host string) ([]netip.Addr
 	return nil, &url.Error{Op: "lookup", URL: host, Err: context.DeadlineExceeded}
 }
 
-// FuzzValidateURL は URL パース経路が panic せず、
-// かつ「成功したなら必ず許可スキーム・非空ホストである」という不変条件を満たすことを検証します。
+// FuzzValidateURL checks that the URL parsing path never panics and that it holds the
+// invariant "a success always has an allowed scheme and a non-empty host".
 func FuzzValidateURL(f *testing.F) {
 	seeds := []string{
 		"https://public.test/api",
@@ -60,26 +60,26 @@ func FuzzValidateURL(f *testing.F) {
 			return
 		}
 
-		// 成功した場合、必ずパース可能で許可スキームでなければならない。
+		// On success the input must parse and carry an allowed scheme.
 		u, parseErr := url.ParseRequestURI(raw)
 		if parseErr != nil {
-			t.Fatalf("ValidateURL は成功したがパースできません: %q", raw)
+			t.Fatalf("ValidateURL succeeded but the input does not parse: %q", raw)
 		}
 
 		scheme := strings.ToLower(u.Scheme)
 		switch scheme {
 		case securenet.SchemeHTTP, securenet.SchemeHTTPS:
 			if u.Hostname() == "" {
-				t.Fatalf("ホストが空なのに成功しました: %q", raw)
+				t.Fatalf("succeeded with an empty host: %q", raw)
 			}
 		default:
-			t.Fatalf("許可されないスキーム %q で成功しました: %q", scheme, raw)
+			t.Fatalf("succeeded with disallowed scheme %q: %q", scheme, raw)
 		}
 	})
 }
 
-// FuzzIsSecureServiceURL は、true を返す入力が必ず
-// パース可能かつ http/https スキームであることを検証します。
+// FuzzIsSecureServiceURL checks that every input it returns true for parses
+// and has an http/https scheme.
 func FuzzIsSecureServiceURL(f *testing.F) {
 	seeds := []string{
 		"https://example.com",
@@ -106,24 +106,24 @@ func FuzzIsSecureServiceURL(f *testing.F) {
 
 		u, err := url.ParseRequestURI(raw)
 		if err != nil {
-			t.Fatalf("true を返したがパースできません: %q", raw)
+			t.Fatalf("returned true but the input does not parse: %q", raw)
 		}
 		if u.Hostname() == "" {
-			t.Fatalf("true を返したがホストが空です: %q", raw)
+			t.Fatalf("returned true but the host is empty: %q", raw)
 		}
 
 		scheme := strings.ToLower(u.Scheme)
 		if scheme != securenet.SchemeHTTP && scheme != securenet.SchemeHTTPS {
-			t.Fatalf("true を返したがスキームが %q です: %q", scheme, raw)
+			t.Fatalf("returned true but the scheme is %q: %q", scheme, raw)
 		}
 		if scheme == securenet.SchemeHTTP && !securenet.IsSecureServiceURL("https://"+u.Host) {
-			t.Fatalf("http を許可したがローカル開発ホストではありません: %q", raw)
+			t.Fatalf("allowed http for a host that is not a local development host: %q", raw)
 		}
 	})
 }
 
-// FuzzZonedLiteral は、ゾーンを付けても判定が緩まないことを検証します。
-// ゾーン付きの IPv6 リテラルが通るなら、ゾーン無しの同じアドレスも通らなければなりません。
+// FuzzZonedLiteral checks that adding a zone never loosens the check: if a zoned
+// IPv6 literal passes, the same address without the zone must pass as well.
 func FuzzZonedLiteral(f *testing.F) {
 	seeds := []string{
 		"64:ff9b::a9fe:a9fe",
@@ -153,7 +153,7 @@ func FuzzZonedLiteral(f *testing.F) {
 		}
 		plain := "http://[" + addr.String() + "]/"
 		if err := securenet.ValidateURL(ctx, plain, opt); err != nil {
-			t.Fatalf("ゾーン付きは通ったのに、ゾーン無しは拒否されました: %q: %v", plain, err)
+			t.Fatalf("the zoned form passed but the unzoned form was rejected: %q: %v", plain, err)
 		}
 	})
 }
