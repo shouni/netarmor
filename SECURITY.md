@@ -1,49 +1,49 @@
-# セキュリティポリシー (Security Policy)
+# Security Policy
 
-## サポート対象バージョン (Supported Versions)
+## Supported Versions
 
-| バージョン | サポート状況 |
+| Version | Supported |
 | --- | --- |
-| v1.4.x | ✅ サポート中 |
-| v1.3.x 以前 | ❌ 非サポート |
+| v1.4.x | ✅ Supported |
+| v1.3.x and earlier | ❌ Not supported |
 
-## 脆弱性の報告 (Reporting a Vulnerability)
+## Reporting a Vulnerability
 
-**脆弱性を公開の Issue で報告しないでください。**
+**Please do not report vulnerabilities in public issues.**
 
-GitHub の [Private vulnerability reporting](https://github.com/shouni/netarmor/security/advisories/new) から非公開で報告してください。
+Report them privately through GitHub's [Private vulnerability reporting](https://github.com/shouni/netarmor/security/advisories/new).
 
-報告には以下を含めてください。
+Please include:
 
-- 影響を受けるバージョン
-- 再現手順、または PoC コード
-- 想定される影響（SSRF 迂回、情報漏洩など）
+- The affected versions
+- Steps to reproduce, or PoC code
+- The expected impact (SSRF bypass, information disclosure, etc.)
 
-初回応答の目安は 7 日以内です。修正が必要と判断した場合は、パッチ公開後に GitHub Security Advisory として公開します。
+Expect a first response within 7 days. If a fix is needed, it will be published as a GitHub Security Advisory after the patch is released.
 
-## 脅威モデル (Threat Model)
+## Threat Model
 
-`securenet` は「アプリケーションが外部から与えられた URL を取得する」場面で、内部ネットワークへの到達を防ぐことを目的としています。
+`securenet` aims to keep an application from reaching the internal network when it fetches a URL supplied from outside.
 
-### 防御対象
+### In Scope
 
-- **SSRF**: プライベート / ループバック / リンクローカル / CGNAT / 予約済みアドレス、および NAT64 / 6to4 / Teredo のような IPv4 を埋め込める変換範囲への接続（既定のブロック対象の一覧は README を参照）
-- **DNS Rebinding (TOCTOU)**: 検証後・接続前に DNS 応答が差し替えられる攻撃。`NewSafeHTTPClient` および `NewSafeTransport` は接続直前に名前解決を行い、**検証済みの IP アドレスに対して直接ダイヤル**することで防ぎます
-- **IPv4-mapped IPv6 による回避**: `::ffff:127.0.0.1` のような表記は `netip.Addr.Unmap()` で正規化してから判定します
-- **プロキシ経由の迂回**: 環境変数 `HTTP_PROXY` / `HTTPS_PROXY` は既定で無効です
-- **リダイレクトによるダウングレード**: `NewSafeHTTPClient` が返すクライアントでは、https から http へのリダイレクトを既定で拒否します
+- **SSRF**: connections to private / loopback / link-local / CGNAT / reserved addresses, and to transition ranges that can embed IPv4 such as NAT64 / 6to4 / Teredo (see the README for the default block list)
+- **DNS rebinding (TOCTOU)**: attacks that swap the DNS answer after the check and before the connection. `NewSafeHTTPClient` and `NewSafeTransport` prevent them by resolving the name right before connecting and **dialing the validated IP address directly**
+- **Bypass via IPv4-mapped IPv6**: notation such as `::ffff:127.0.0.1` is normalized with `netip.Addr.Unmap()` before the check
+- **Bypass via a proxy**: the `HTTP_PROXY` / `HTTPS_PROXY` environment variables are disabled by default
+- **Downgrade via redirects**: the client returned by `NewSafeHTTPClient` refuses redirects from https to http by default
 
-### 防御対象外 (Out of Scope)
+### Out of Scope
 
-以下は本パッケージの責務ではありません。利用側での対策が必要です。
+The following are not this package's responsibility and need to be handled by the caller.
 
-- **`ValidateURL` 単体での使用**: 静的検証のみでは DNS Rebinding を防げません。必ず `NewSafeHTTPClient` / `NewSafeTransport` と併用してください
-- **`NewSafeTransport` 単体使用時のリダイレクト**: リダイレクトポリシー (`WithMaxRedirects` / `WithAllowRedirectDowngrade`) は `*http.Client.CheckRedirect` の機能であり、Transport には含まれません。自前で `*http.Client` を組む場合、これらのオプションは無視され Go 既定の挙動（10 回まで追従・ダウングレード制限なし）になります。IP 検証は Transport 側なので引き続き有効です
-- **`WithProxy` 有効時の最終宛先**: 接続先はプロキシサーバになるため、最終的な宛先 IP は検証されません
-- **`WithAllowLoopback` / `WithAllowPrivate` / `WithAllowLinkLocal` 有効時**: 明示的にポリシーを緩めた場合の結果は利用側の責任です
-- **レスポンスボディのサイズ・内容**: 展開爆弾やレスポンス内容の検証は行いません
-- **アプリケーション層の認可**: 到達可能な公開エンドポイントへのアクセス制御
+- **Using `ValidateURL` on its own**: static validation alone cannot prevent DNS rebinding. Always use it together with `NewSafeHTTPClient` / `NewSafeTransport`
+- **Redirects when `NewSafeTransport` is used on its own**: the redirect policy (`WithMaxRedirects` / `WithAllowRedirectDowngrade`) is a feature of `*http.Client.CheckRedirect` and is not part of the Transport. If you build your own `*http.Client`, these options are ignored and Go's default behavior applies (up to 10 redirects, with no downgrade restriction). IP validation lives in the Transport, so it stays in effect
+- **The final destination when `WithProxy` is enabled**: the connection goes to the proxy server, so the final destination IP is not validated
+- **When `WithAllowLoopback` / `WithAllowPrivate` / `WithAllowLinkLocal` are enabled**: the consequences of explicitly relaxing the policy are the caller's responsibility
+- **Response body size and content**: decompression bombs and response content are not checked
+- **Application-level authorization**: access control for public endpoints that are reachable
 
-### fail-closed 方針
+### Failing closed
 
-ホスト名が複数の IP アドレスに解決される場合、そのうち 1 つでも制限対象であれば接続全体を拒否します。「安全な IP だけを選んで接続する」方式は、攻撃者が解決順序を操作できる状況で回避されうるため採用していません。
+When a hostname resolves to several IP addresses, the whole connection is refused if any one of them is restricted. Connecting only to the "safe" addresses is not done, because it can be bypassed whenever an attacker can influence resolution order.

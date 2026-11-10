@@ -8,34 +8,36 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go Reference](https://pkg.go.dev/badge/github.com/shouni/netarmor.svg)](https://pkg.go.dev/github.com/shouni/netarmor)
 
-## 🚀 概要 (About) - 接続直前に IP を検証し、検証済みの IP へ直接つなぐ
+English | [日本語](README.ja.md)
 
-**Net Armor** は、Go アプリケーションの外部通信を SSRF (Server-Side Request Forgery) や DNS Rebinding 攻撃から保護するセキュリティライブラリです。**外部依存を持ちません**（`go.mod` の require は空です）。
+## 🚀 About - validate the IP right before connecting, then dial the validated IP directly
 
-> **v1.4.0 で `retry` パッケージを [go-http-kit](https://github.com/shouni/go-http-kit) へ移しました。** 利用者は import パスを `github.com/shouni/go-http-kit/retry` に変更してください。API は変わっていません。
+**Net Armor** is a security library that protects a Go application's outbound traffic from SSRF (Server-Side Request Forgery) and DNS rebinding attacks. **It has no external dependencies** (the `require` block in `go.mod` is empty).
 
-## ✨ 提供機能 (Features)
+> **In v1.4.0 the `retry` package moved to [go-http-kit](https://github.com/shouni/go-http-kit).** Change your import path to `github.com/shouni/go-http-kit/retry`. The API is unchanged.
 
-* **強力な防御 (`securenet`)**: HTTP クライアントの Transport 層で接続直前に IP アドレスを検証し、**検証済み IP に対して直接接続**します。DNS Rebinding 等の TOCTOU 攻撃を遮断します。
-* **型付きエラー**: すべての失敗理由を `errors.Is` / `errors.As` で分類できます。エラーメッセージの文字列比較は不要です。
-* **テスト容易性**: リゾルバを差し替えられるため、実 DNS に依存しないユニットテストが書けます。
-* **依存ゼロ**: 標準ライブラリのみで動きます。取り込んでも利用側のモジュールグラフが広がりません。
+## ✨ Features
+
+* **Strong defense (`securenet`)**: validates the IP address in the HTTP client's Transport layer right before connecting, and **connects directly to the validated IP**. This shuts out TOCTOU attacks such as DNS rebinding.
+* **Typed errors**: every failure reason can be classified with `errors.Is` / `errors.As`. No need to compare error message strings.
+* **Testability**: the resolver can be swapped, so unit tests can be written without depending on real DNS.
+* **Zero dependencies**: runs on the standard library alone. Importing it does not widen your module graph.
 
 ---
 
-## 📦 パッケージ構成 (Package Structure)
+## 📦 Package Structure
 
-| パッケージ | 説明 | 主な提供機能 |
+| Package | Description | Main API |
 | --- | --- | --- |
-| **`securenet`** | **ネットワークセキュリティ**。SSRF 対策や、サービス URL の妥当性判定を行います。 | `NewSafeHTTPClient` / `NewSafeTransport` / `ValidateURL` / `IsSecureServiceURL` |
+| **`securenet`** | **Network security**. SSRF protection and sanity checks for service URLs. | `NewSafeHTTPClient` / `NewSafeTransport` / `ValidateURL` / `IsSecureServiceURL` |
 
 ---
 
-## 🚦 使い方 (Usage)
+## 🚦 Usage
 
-### 1. 安全な HTTP リクエスト (`securenet`)
+### 1. Safe HTTP requests (`securenet`)
 
-既定のポリシーは、プライベート / ループバック / リンクローカル等への接続を拒否し、環境変数の `HTTP_PROXY` / `HTTPS_PROXY` を無視します。
+The default policy refuses connections to private / loopback / link-local and similar addresses, and ignores the `HTTP_PROXY` / `HTTPS_PROXY` environment variables.
 
 ```go
 import (
@@ -43,18 +45,18 @@ import (
     "github.com/shouni/netarmor/securenet"
 )
 
-// 接続直前のIP検証機能を持つ安全なクライアントを生成
+// Create a safe client that validates the IP right before connecting
 client := securenet.NewSafeHTTPClient(10 * time.Second)
 
-// 安全なURL（例：パブリックなAPI）へのアクセス
+// Access a safe URL (e.g. a public API)
 resp, err := client.Get("https://api.example.com/data")
 
-// 安全ではないURL（例：内部ネットワークへの攻撃試行）は、DialContext層で遮断されます
+// An unsafe URL (e.g. an attempt to reach the internal network) is blocked at the DialContext layer
 _, err = client.Get("http://169.254.169.254/latest/meta-data/")
 // errors.Is(err, securenet.ErrRestrictedIP) == true
 ```
 
-独自の `*http.Client` を組み立てたい場合は Transport だけを取得できます。
+To assemble your own `*http.Client`, you can take just the Transport.
 
 ```go
 client := &http.Client{
@@ -63,11 +65,11 @@ client := &http.Client{
 }
 ```
 
-> ⚠️ **Transport だけを使う場合、リダイレクトポリシーは効きません**（IP 検証は Transport 側なので有効なままです）。理由と影響は [SECURITY.md の防御対象外](SECURITY.md#防御対象外-out-of-scope) を参照してください。
+> ⚠️ **When you use only the Transport, the redirect policy does not apply** (IP validation lives in the Transport, so it stays in effect). See [Out of Scope in SECURITY.md](SECURITY.md#out-of-scope) for why and what it affects.
 
-### 2. URL の静的検証
+### 2. Static URL validation
 
-ユーザー入力を受け付けた時点で早期に弾きたい場合は `ValidateURL` を使用します。
+To reject input early, at the point user input is accepted, use `ValidateURL`.
 
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -76,84 +78,84 @@ defer cancel()
 if err := securenet.ValidateURL(ctx, rawURL); err != nil {
     switch {
     case errors.Is(err, securenet.ErrRestrictedIP):
-        // 制限されたネットワークへのアクセス
+        // access to a restricted network
     case errors.Is(err, securenet.ErrDisallowedScheme):
-        // 許可されていないスキーム
+        // disallowed scheme
     case errors.Is(err, securenet.ErrInvalidURL):
-        // URL のパース失敗
+        // the URL failed to parse
     case errors.Is(err, securenet.ErrEmptyHost):
-        // ホスト名が空
+        // empty hostname
     case errors.Is(err, securenet.ErrNoAddresses):
-        // 名前解決の結果が空
+        // name resolution returned nothing
     }
 }
 ```
 
-> ⚠️ **静的検証だけでは DNS Rebinding を防げません。** 検証後・接続前に DNS 応答が差し替えられる攻撃に対する本体の防御は `NewSafeHTTPClient` / `NewSafeTransport` の側にあります。必ず併用してください。
+> ⚠️ **Static validation alone cannot prevent DNS rebinding.** The real defense against a DNS answer swapped after the check and before the connection lives in `NewSafeHTTPClient` / `NewSafeTransport`. Always use them together.
 
-### 3. ポリシーの調整
+### 3. Tuning the policy
 
-既定のポリシーは Option で緩めたり厳しくしたりできます。
+The default policy can be loosened or tightened with Options.
 
 ```go
-// テストでローカルサーバに接続する
+// Connect to a local server in tests
 client := securenet.NewSafeHTTPClient(2*time.Second, securenet.WithAllowLoopback())
 
-// 社内ネットワークの特定範囲だけを許可する
+// Allow only a specific range of the internal network
 client := securenet.NewSafeHTTPClient(10*time.Second,
     securenet.WithAllowedCIDRs("10.1.0.0/16"))
 
-// 社内プロキシ経由にする（プロキシ自身のアドレスの許可も必要）
+// Go through a corporate proxy (the proxy's own address must be allowed too)
 client := securenet.NewSafeHTTPClient(10*time.Second,
     securenet.WithProxyFromEnvironment(),
     securenet.WithAllowedCIDRs("10.0.0.0/8"))
 
-// リゾルバを差し替えて実 DNS に依存しないテストを書く
+// Swap the resolver to write tests that do not depend on real DNS
 client := securenet.NewSafeHTTPClient(2*time.Second,
     securenet.WithResolver(myFakeResolver))
 ```
 
-`With...` のオプションは、名前解決の差し替え・プロキシの明示的な有効化・特定ネットワークの
-許可とブロック・ポリシーの緩和・Transport / Dialer の持ち込み・リダイレクトポリシーの
-6 系統です（一覧と個々の意味は godoc）。**許可の指定はブロックより優先されます。**
+The `With...` options fall into six groups: swapping name resolution, explicitly enabling a proxy,
+allowing and blocking specific networks, relaxing the policy, bringing your own Transport / Dialer,
+and the redirect policy (see godoc for the full list and what each one does). **Allow rules take precedence over block rules.**
 
-リダイレクトで失敗した場合も型で判別できます。`http.Client` が返す `*url.Error` の包みは `errors.Is` / `errors.As` が透過します。
+Redirect failures can be told apart by type as well. `errors.Is` / `errors.As` see through the `*url.Error` wrapper that `http.Client` returns.
 
 ```go
 switch {
-case errors.Is(err, securenet.ErrTooManyRedirects):  // 追従回数の上限に到達
-case errors.Is(err, securenet.ErrRedirectDowngrade): // https から http へのダウングレード
+case errors.Is(err, securenet.ErrTooManyRedirects):  // the redirect limit was reached
+case errors.Is(err, securenet.ErrRedirectDowngrade): // a downgrade from https to http
 }
 ```
 
 ---
 
-## 🛡️ セキュリティポリシー
+## 🛡️ Security Policy
 
-`securenet` パッケージは、デフォルトで以下のアクセスを「制限されたネットワーク」として検知し、ブロックします。
+By default the `securenet` package treats the following as "restricted networks" and blocks access to them.
 
-* プライベート IP アドレス範囲 (RFC 1918、IPv6 ULA を含む)
-* ループバックアドレス (localhost, 127.0.0.1, ::1)
-* リンクローカルアドレス (169.254.0.0/16 等)
-* 未指定アドレス (0.0.0.0, ::) と "this network" (0.0.0.0/8)
-* Carrier-grade NAT 範囲 (100.64.0.0/10)
-* IETF プロトコル割り当て (192.0.0.0/24)、Discard-Only (100::/64)
-* ベンチマーク用ネットワーク (198.18.0.0/15)
-* ドキュメント用 / TEST-NET 範囲 (192.0.2.0/24、198.51.100.0/24、203.0.113.0/24、2001:db8::/32、3fff::/20)
-* IPv4 を埋め込める変換範囲 — NAT64 (64:ff9b::/96、64:ff9b:1::/48)、6to4 (2002::/16、192.88.99.0/24)、Teredo (2001::/32)
-* 廃止されたサイトローカル (fec0::/10)、SRv6 SID (5f00::/16)
-* マルチキャスト、予約済み範囲 (240.0.0.0/4)
+* Private IP address ranges (RFC 1918, including IPv6 ULA)
+* Loopback addresses (localhost, 127.0.0.1, ::1)
+* Link-local addresses (169.254.0.0/16 and others)
+* Unspecified addresses (0.0.0.0, ::) and "this network" (0.0.0.0/8)
+* The carrier-grade NAT range (100.64.0.0/10)
+* IETF protocol assignments (192.0.0.0/24) and Discard-Only (100::/64)
+* The benchmarking network (198.18.0.0/15)
+* Documentation / TEST-NET ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32, 3fff::/20)
+* Transition ranges that can embed IPv4 — NAT64 (64:ff9b::/96, 64:ff9b:1::/48), 6to4 (2002::/16, 192.88.99.0/24), Teredo (2001::/32)
+* Deprecated site-local (fec0::/10) and SRv6 SIDs (5f00::/16)
+* Multicast and the reserved range (240.0.0.0/4)
 
-`::ffff:127.0.0.1` のような IPv4-mapped IPv6 表記は正規化した上で判定するため、表記による回避はできません。NAT64 などの変換範囲は、アドレス内に埋め込んだ内部 IPv4（例: `64:ff9b::a9fe:a9fe` はメタデータエンドポイント）への到達経路になりうるため範囲全体をブロックします。NAT64 環境で正当に必要な場合は `WithAllowedCIDRs` で明示的に許可してください。
+IPv4-mapped IPv6 notation such as `::ffff:127.0.0.1` is normalized before the check, so the notation cannot be used to slip through. Transition ranges such as NAT64 can be a route to an internal IPv4 address embedded in the address (for example, `64:ff9b::a9fe:a9fe` is the metadata endpoint), so each range is blocked as a whole. If a NAT64 environment legitimately needs one, allow it explicitly with `WithAllowedCIDRs`.
 
-ホスト名が複数の IP に解決される場合、**1 つでも制限対象があれば全体を拒否します** (fail-closed)。
+When a hostname resolves to several IPs, **the whole connection is refused if any one of them is restricted** (fail-closed).
 
-`IsSecureServiceURL` は HTTPS URL またはローカル開発用 HTTP URL を許可しますが、ホスト名が空の URL は拒否します。これは設定値の妥当性チェックであり、名前解決を行いません。
+`IsSecureServiceURL` allows HTTPS URLs and HTTP URLs for local development, but rejects a URL with an empty hostname. It is a sanity check for configuration values and does no name resolution.
 
-脅威モデルの詳細と脆弱性の報告方法は [SECURITY.md](SECURITY.md) を参照してください。
+See [SECURITY.md](SECURITY.md) for the threat model in detail and how to report a vulnerability.
 
 ---
 
-## 📜 ライセンス (License)
+## 📜 License
 
-このプロジェクトは [MIT License](https://opensource.org/licenses/MIT) の下で公開されています。
+This project is released under the [MIT License](https://opensource.org/licenses/MIT).

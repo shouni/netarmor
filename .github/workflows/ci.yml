@@ -1,4 +1,4 @@
-# CI の実体は shouni/workflows。ジョブ構成とタグ運用の理由はそちらの README にある。
+# The CI itself lives in shouni/workflows. Its README explains the job layout and how tags are used.
 name: CI
 
 on:
@@ -20,6 +20,6 @@ jobs:
     with:
       coverage: true
       upload-coverage: true
-      # URL 検証はユーザー入力を直接受けるため、探索を毎回回す。
+      # URL validation takes user input directly, so the fuzzers run on every build.
       fuzz-targets: "./securenet#FuzzValidateURL ./securenet#FuzzIsSecureServiceURL ./securenet#FuzzZonedLiteral"
       fuzz-time: 60s

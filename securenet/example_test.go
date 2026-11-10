@@ -12,8 +12,8 @@ import (
 	"github.com/shouni/netarmor/securenet"
 )
 
-// exampleResolver は例示を決定的にするための固定リゾルバです。
-// 実際のコードではリゾルバを指定せず、既定の net.DefaultResolver を使用します。
+// exampleResolver is a fixed resolver that keeps the examples deterministic.
+// Real code leaves the resolver unset and uses the default net.DefaultResolver.
 type exampleResolver map[string][]netip.Addr
 
 func (r exampleResolver) LookupNetIP(_ context.Context, _, host string) ([]netip.Addr, error) {
@@ -31,11 +31,11 @@ var demoResolver = exampleResolver{
 func ExampleValidateURL() {
 	ctx := context.Background()
 
-	// 公開 IP に解決されるホストは許可される
+	// A host that resolves to a public IP is allowed
 	fmt.Println(securenet.ValidateURL(ctx, "https://api.example.com/v1",
 		securenet.WithResolver(demoResolver)))
 
-	// プライベート IP に解決されるホストは拒否される
+	// A host that resolves to a private IP is rejected
 	fmt.Println(securenet.ValidateURL(ctx, "https://internal.example.com/admin",
 		securenet.WithResolver(demoResolver)))
 
@@ -44,7 +44,7 @@ func ExampleValidateURL() {
 	// securenet: restricted network: host "internal.example.com" resolved to 10.0.0.5
 }
 
-// 検証エラーは errors.Is / errors.As で分類できます。
+// Validation errors can be classified with errors.Is / errors.As.
 func ExampleValidateURL_errorHandling() {
 	ctx := context.Background()
 
@@ -73,14 +73,14 @@ func ExampleValidateURL_errorHandling() {
 func ExampleNewSafeHTTPClient() {
 	client := securenet.NewSafeHTTPClient(10 * time.Second)
 
-	// クラウドのメタデータエンドポイントは DialContext 層で遮断される
+	// The cloud metadata endpoint is blocked at the DialContext layer
 	_, err := client.Get("http://169.254.169.254/latest/meta-data/")
 
 	fmt.Println("blocked:", errors.Is(err, securenet.ErrRestrictedIP))
 	// Output: blocked: true
 }
 
-// テストではローカルサーバへの接続を明示的に許可できます。
+// Tests can explicitly allow connections to a local server.
 func ExampleWithAllowLoopback() {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -100,14 +100,14 @@ func ExampleWithAllowLoopback() {
 	// Output: status: 200
 }
 
-// 独自の *http.Client を組み立てたい場合は Transport だけを取得します。
+// To assemble your own *http.Client, take just the Transport.
 func ExampleNewSafeTransport() {
 	transport := securenet.NewSafeTransport(10 * time.Second)
 
 	client := &http.Client{
 		Transport: transport,
 		Timeout:   10 * time.Second,
-		// cookiejar やリダイレクトポリシーを独自に設定できる
+		// a cookie jar and redirect policy can be set as you like
 	}
 
 	_, err := client.Get("http://10.0.0.1/internal")
@@ -115,7 +115,7 @@ func ExampleNewSafeTransport() {
 	// Output: blocked: true
 }
 
-// 社内ネットワークへのアクセスが必要な場合は、範囲を限定して許可します。
+// When an internal network must be reachable, allow just that range.
 func ExampleWithAllowedCIDRs() {
 	ctx := context.Background()
 
@@ -124,10 +124,10 @@ func ExampleWithAllowedCIDRs() {
 		securenet.WithAllowedCIDRs("10.0.0.0/8"),
 	}
 
-	// 許可した範囲は通る
+	// The allowed range passes
 	fmt.Println(securenet.ValidateURL(ctx, "https://internal.example.com/", opts...))
 
-	// 許可していない範囲は引き続き拒否される
+	// Ranges that were not allowed are still rejected
 	err := securenet.ValidateURL(ctx, "http://192.168.1.1/", opts...)
 	fmt.Println("still blocked:", errors.Is(err, securenet.ErrRestrictedIP))
 
@@ -137,7 +137,7 @@ func ExampleWithAllowedCIDRs() {
 }
 
 func ExampleIsSecureServiceURL() {
-	// 名前解決を伴わない、設定値の妥当性チェック
+	// A configuration sanity check that does no name resolution
 	fmt.Println(securenet.IsSecureServiceURL("https://api.example.com"))
 	fmt.Println(securenet.IsSecureServiceURL("http://localhost:8080"))
 	fmt.Println(securenet.IsSecureServiceURL("http://api.example.com"))

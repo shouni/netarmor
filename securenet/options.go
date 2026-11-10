@@ -11,39 +11,40 @@ import (
 	"time"
 )
 
-// Resolver は名前解決の抽象です。*net.Resolver がそのまま満たすため、
-// 本番では net.DefaultResolver を、テストではフェイク実装を差し込めます。
+// Resolver abstracts name resolution. *net.Resolver satisfies it as is, so production
+// can use net.DefaultResolver and tests can inject a fake.
 type Resolver interface {
 	LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error)
 }
 
-// defaultBlockedPrefixes は、Go 標準の判定メソッド（IsPrivate / IsLoopback 等）では
-// カバーされない、追加でブロックすべきネットワークです。
+// defaultBlockedPrefixes lists the additional networks to block that the standard
+// library's predicates (IsPrivate, IsLoopback and so on) do not cover.
 //
 //   - 0.0.0.0/8         : "this network" (RFC 1122)
 //   - 100.64.0.0/10     : Carrier-grade NAT (RFC 6598)
-//   - 192.0.0.0/24      : IETF プロトコル割り当て (RFC 6890)
+//   - 192.0.0.0/24      : IETF protocol assignments (RFC 6890)
 //   - 192.0.2.0/24      : TEST-NET-1 (RFC 5737)
-//   - 192.88.99.0/24    : 6to4 リレーエニーキャスト (廃止, RFC 7526)
-//   - 198.18.0.0/15     : ベンチマーク用 (RFC 2544)
+//   - 192.88.99.0/24    : 6to4 relay anycast (deprecated, RFC 7526)
+//   - 198.18.0.0/15     : benchmarking (RFC 2544)
 //   - 198.51.100.0/24   : TEST-NET-2 (RFC 5737)
 //   - 203.0.113.0/24    : TEST-NET-3 (RFC 5737)
-//   - 240.0.0.0/4       : 予約済み (RFC 1112)
+//   - 240.0.0.0/4       : reserved (RFC 1112)
 //   - 64:ff9b::/96      : NAT64 well-known prefix (RFC 6052)
-//   - 64:ff9b:1::/48    : IPv4/IPv6 変換・ローカル用 (RFC 8215)
+//   - 64:ff9b:1::/48    : local-use IPv4/IPv6 translation (RFC 8215)
 //   - 100::/64          : Discard-Only (RFC 6666)
 //   - 2001::/32         : Teredo (RFC 4380)
-//   - 2001:db8::/32     : ドキュメント用 (RFC 3849)
+//   - 2001:db8::/32     : documentation (RFC 3849)
 //   - 2002::/16         : 6to4 (RFC 3056)
-//   - 3fff::/20         : ドキュメント用・拡張 (RFC 9637)
+//   - 3fff::/20         : documentation, expanded (RFC 9637)
 //   - 5f00::/16         : SRv6 SID (RFC 9602)
-//   - fec0::/10         : サイトローカル (廃止, RFC 3879)
+//   - fec0::/10         : site-local (deprecated, RFC 3879)
 //
-// NAT64 / 6to4 / Teredo の変換範囲は、アドレス内に IPv4 を埋め込めるため、
-// 埋め込んだ内部 IPv4（例: 64:ff9b::a9fe:a9fe はメタデータエンドポイント）への
-// 到達経路になりえます。埋め込み先を個別に検査する代わりに範囲全体を fail-closed で
-// ブロックします。NAT64 環境で正当に必要な場合は WithAllowedCIDRs で明示的に
-// 許可してください（その場合、埋め込み IPv4 の検査は行われない点に注意）。
+// The NAT64 / 6to4 / Teredo transition ranges can embed an IPv4 address, so they can
+// become a route to an embedded internal IPv4 address (for example, 64:ff9b::a9fe:a9fe
+// is the metadata endpoint). Rather than checking each embedded address, the whole
+// range is blocked, failing closed. If a NAT64 environment legitimately needs one,
+// allow it explicitly with WithAllowedCIDRs (note that the embedded IPv4 address is
+// then not checked).
 var defaultBlockedPrefixes = mustParsePrefixes(
 	"0.0.0.0/8",
 	"100.64.0.0/10",
@@ -65,7 +66,7 @@ var defaultBlockedPrefixes = mustParsePrefixes(
 	"fec0::/10",
 )
 
-// policy は、ある IP アドレスへの接続を許可するかどうかを決定します。
+// policy decides whether a connection to a given IP address is allowed.
 type policy struct {
 	allowed        []netip.Prefix
 	blocked        []netip.Prefix
@@ -74,18 +75,18 @@ type policy struct {
 	allowLinkLocal bool
 }
 
-// isRestricted は、指定されたアドレスが接続を禁止されているかを判定します。
+// isRestricted reports whether connecting to addr is forbidden.
 //
-// 判定順序は「許可リスト → 標準判定 → ブロックリスト」です。
-// 許可リストが最優先されるため、WithAllowedCIDRs で明示的に許可された
-// アドレスは他のすべてのルールに優先して接続が許可されます。
+// The evaluation order is allowlist, then standard-library predicates, then blocklist.
+// The allowlist comes first, so an address explicitly allowed with WithAllowedCIDRs
+// is allowed ahead of every other rule.
 func (p *policy) isRestricted(addr netip.Addr) bool {
-	// IPv4-mapped IPv6 (::ffff:127.0.0.1) を IPv4 に正規化してから判定する。
-	// これを怠ると mapped 形式でプライベート IP 判定を回避されうる。
+	// Normalise IPv4-mapped IPv6 (::ffff:127.0.0.1) to IPv4 before checking.
+	// Without this, the mapped form could slip past the private-IP checks.
 	//
-	// ゾーンも落とす。netip.Prefix.Contains はゾーン付きアドレスに常に false を
-	// 返すため、残したままだと [64:ff9b::a9fe:a9fe%25eth0] のようにゾーンを付ける
-	// だけで blocked の範囲判定を素通りできてしまう。
+	// Drop the zone as well. netip.Prefix.Contains always returns false for a zoned
+	// address, so keeping it would let a bare zone, as in
+	// [64:ff9b::a9fe:a9fe%25eth0], slip past the blocked-range check.
 	a := addr.Unmap().WithZone("")
 
 	if !a.IsValid() {
@@ -105,8 +106,8 @@ func (p *policy) isRestricted(addr netip.Addr) bool {
 		return !p.allowPrivate
 	case a.IsLinkLocalUnicast(), a.IsLinkLocalMulticast():
 		return !p.allowLinkLocal
-	// IsMulticast は IPv6 の ff00::/8 全体を含むため、インターフェースローカル
-	// マルチキャスト (ff01::/16) の判定は不要。
+	// IsMulticast covers all of IPv6 ff00::/8, so interface-local multicast
+	// (ff01::/16) needs no separate check.
 	case a.IsUnspecified(), a.IsMulticast():
 		return true
 	}
@@ -120,7 +121,7 @@ func (p *policy) isRestricted(addr netip.Addr) bool {
 	return false
 }
 
-// options は securenet の各コンストラクタに共通する設定です。
+// options is the configuration shared by securenet's constructors.
 type options struct {
 	policy         policy
 	resolver       Resolver
@@ -131,19 +132,19 @@ type options struct {
 	allowDowngrade bool
 }
 
-// Option は securenet の挙動を調整します。
+// Option adjusts securenet's behavior.
 type Option func(*options)
 
-// defaultOptions は「何も指定しない場合」の安全側の既定値を返します。
+// defaultOptions returns the safe defaults used when nothing is specified.
 func defaultOptions() options {
 	return options{
 		policy: policy{
-			// Clip で cap == len にしておくことで、WithBlockedCIDRs の append が
-			// パッケージ共有のバッキング配列を書き換えることを防ぐ。
+			// Clip makes cap == len, so WithBlockedCIDRs' append cannot overwrite
+			// the package-wide backing array.
 			blocked: slices.Clip(defaultBlockedPrefixes),
 		},
 		resolver:     net.DefaultResolver,
-		proxy:        nil, // 環境変数のプロキシは既定で無効
+		proxy:        nil, // the environment proxy is disabled by default
 		maxRedirects: 10,
 	}
 }
@@ -158,8 +159,8 @@ func newOptions(opts []Option) *options {
 	return &o
 }
 
-// WithResolver は名前解決に使うリゾルバを差し替えます。
-// テストで実 DNS への依存を避けたい場合に使用します。
+// WithResolver replaces the resolver used for name resolution.
+// Use it in tests to avoid depending on real DNS.
 func WithResolver(r Resolver) Option {
 	return func(o *options) {
 		if r != nil {
@@ -168,32 +169,32 @@ func WithResolver(r Resolver) Option {
 	}
 }
 
-// WithProxy は HTTP プロキシの選択関数を設定します。
+// WithProxy sets the function that selects the HTTP proxy.
 //
-// 既定ではプロキシは無効です。これは HTTP_PROXY / HTTPS_PROXY を悪用して
-// IP 検証を迂回されることを防ぐためですが、社内プロキシ経由が必須の環境では
-// このオプションで明示的に有効化できます。
+// Proxies are disabled by default, so that HTTP_PROXY / HTTPS_PROXY cannot be abused
+// to route around IP validation. Environments that must go through a corporate proxy
+// can enable one explicitly with this option.
 //
-// プロキシを使用する場合、DialContext が受け取る接続先はプロキシサーバの
-// アドレスになります。したがって次の 2 点に注意してください。
+// With a proxy, the address DialContext receives is the proxy server's. Note two
+// consequences:
 //
-//   - 最終的な宛先 IP に対する検証は効きません。プロキシ自身が信頼できることが前提です。
-//   - プロキシがプライベートアドレスに存在する場合、既定のポリシーではその接続自体が
-//     拒否されます。WithAllowedCIDRs でプロキシのアドレスを明示的に許可してください。
+//   - The final destination IP is not validated. The proxy itself must be trusted.
+//   - If the proxy sits at a private address, the default policy rejects the
+//     connection to it. Allow the proxy's address explicitly with WithAllowedCIDRs.
 func WithProxy(fn func(*http.Request) (*url.URL, error)) Option {
 	return func(o *options) { o.proxy = fn }
 }
 
-// WithProxyFromEnvironment は HTTP_PROXY / HTTPS_PROXY / NO_PROXY を有効化します。
-// トレードオフについては WithProxy のドキュメントを参照してください。
+// WithProxyFromEnvironment enables HTTP_PROXY / HTTPS_PROXY / NO_PROXY.
+// See WithProxy for the trade-offs.
 func WithProxyFromEnvironment() Option {
 	return WithProxy(http.ProxyFromEnvironment)
 }
 
-// WithAllowedCIDRs は、既定のポリシーで拒否されるアドレスであっても
-// 接続を許可するネットワークを追加します。許可リストは他のすべての判定に優先します。
+// WithAllowedCIDRs adds networks to which connections are allowed even when the
+// default policy would reject them. The allowlist takes precedence over every other check.
 //
-// 不正な CIDR 表記は無視されます。事前に検証したい場合は netip.ParsePrefix を使用してください。
+// Invalid CIDR notation is ignored. To validate it beforehand, use netip.ParsePrefix.
 func WithAllowedCIDRs(cidrs ...string) Option {
 	return func(o *options) {
 		for _, c := range cidrs {
@@ -204,7 +205,7 @@ func WithAllowedCIDRs(cidrs ...string) Option {
 	}
 }
 
-// WithAllowedPrefixes は WithAllowedCIDRs のパース済み版です。
+// WithAllowedPrefixes is the pre-parsed version of WithAllowedCIDRs.
 func WithAllowedPrefixes(prefixes ...netip.Prefix) Option {
 	return func(o *options) {
 		for _, pre := range prefixes {
@@ -213,9 +214,9 @@ func WithAllowedPrefixes(prefixes ...netip.Prefix) Option {
 	}
 }
 
-// WithBlockedCIDRs は、既定のブロック一覧に追加でネットワークを登録します。
+// WithBlockedCIDRs adds networks to the default blocklist.
 //
-// 不正な CIDR 表記は無視されます。事前に検証したい場合は netip.ParsePrefix を使用してください。
+// Invalid CIDR notation is ignored. To validate it beforehand, use netip.ParsePrefix.
 func WithBlockedCIDRs(cidrs ...string) Option {
 	return func(o *options) {
 		for _, c := range cidrs {
@@ -226,52 +227,52 @@ func WithBlockedCIDRs(cidrs ...string) Option {
 	}
 }
 
-// WithAllowLoopback はループバックアドレスへの接続を許可します。
-// テストで httptest.NewServer を対象にする場合などに使用します。
-// 本番環境で有効にすると SSRF 防御が大きく損なわれます。
+// WithAllowLoopback allows connections to loopback addresses.
+// Use it, for example, when tests target an httptest.NewServer.
+// Enabling it in production seriously weakens SSRF protection.
 func WithAllowLoopback() Option {
 	return func(o *options) { o.policy.allowLoopback = true }
 }
 
-// WithAllowPrivate は RFC 1918 のプライベートアドレスへの接続を許可します。
-// 本番環境で有効にすると SSRF 防御が大きく損なわれます。
+// WithAllowPrivate allows connections to RFC 1918 private addresses.
+// Enabling it in production seriously weakens SSRF protection.
 func WithAllowPrivate() Option {
 	return func(o *options) { o.policy.allowPrivate = true }
 }
 
-// WithAllowLinkLocal はリンクローカルアドレスへの接続を許可します。
-// 169.254.169.254 などのクラウドメタデータエンドポイントが到達可能になるため、
-// 有効化は極力避けてください。
+// WithAllowLinkLocal allows connections to link-local addresses.
+// It makes cloud metadata endpoints such as 169.254.169.254 reachable, so avoid
+// enabling it whenever possible.
 func WithAllowLinkLocal() Option {
 	return func(o *options) { o.policy.allowLinkLocal = true }
 }
 
-// WithBaseTransport は、複製元となる *http.Transport を指定します。
-// HTTP/2 設定やコネクションプールの調整を持ち込みたい場合に使用します。
+// WithBaseTransport sets the *http.Transport to clone from.
+// Use it to bring in HTTP/2 settings or connection-pool tuning.
 //
-// 指定した Transport は複製された上で、次のフィールドが securenet に上書きされます。
+// The given Transport is cloned, and securenet then overwrites these fields:
 //
-//   - Proxy / DialContext : 検証付きの実装に差し替えられます。
-//   - DialTLSContext / DialTLS / Dial : nil にされます。DialTLSContext が
-//     設定されていると HTTPS で DialContext が呼ばれず IP 検証が迂回されるため、
-//     本パッケージでは無効化します。TLS の設定は TLSClientConfig で行ってください。
+//   - Proxy / DialContext: replaced with the validating implementations.
+//   - DialTLSContext / DialTLS / Dial: set to nil. With DialTLSContext set, HTTPS
+//     never calls DialContext and IP validation is bypassed, so this package
+//     disables it. Configure TLS through TLSClientConfig instead.
 func WithBaseTransport(t *http.Transport) Option {
 	return func(o *options) { o.baseTransport = t }
 }
 
-// WithDialer は接続に使用する *net.Dialer を差し替えます。
-// Dialer の Control フックなどを利用したい場合に使用します。
-// 指定した場合、コンストラクタに渡した timeout は Dialer には適用されないため、
-// 必要なら Dialer 側の Timeout を自分で設定してください。
+// WithDialer replaces the *net.Dialer used to connect.
+// Use it, for example, to use the Dialer's Control hook.
+// When set, the timeout passed to the constructor is not applied to the Dialer,
+// so set the Dialer's Timeout yourself if needed.
 func WithDialer(d *net.Dialer) Option {
 	return func(o *options) { o.dialer = d }
 }
 
-// WithMaxRedirects は追従するリダイレクトの最大回数を設定します。
-// 0 を指定するとリダイレクトを一切追従しません。負値は既定値 (10) として扱われます。
+// WithMaxRedirects sets the maximum number of redirects to follow.
+// 0 follows no redirects at all. A negative value is treated as the default (10).
 //
-// 上限に達した場合、リクエストは *TooManyRedirectsError で失敗します
-// (errors.Is(err, ErrTooManyRedirects) が true)。
+// When the limit is reached, the request fails with a *TooManyRedirectsError
+// (errors.Is(err, ErrTooManyRedirects) is true).
 func WithMaxRedirects(n int) Option {
 	return func(o *options) {
 		if n >= 0 {
@@ -280,10 +281,10 @@ func WithMaxRedirects(n int) Option {
 	}
 }
 
-// WithAllowRedirectDowngrade は https から http へのリダイレクト追従を許可します。
+// WithAllowRedirectDowngrade allows following redirects from https to http.
 //
-// 既定ではダウングレードを伴うリダイレクトは *RedirectDowngradeError で拒否されます
-// (errors.Is(err, ErrRedirectDowngrade) が true)。
+// By default, a redirect that downgrades is refused with a *RedirectDowngradeError
+// (errors.Is(err, ErrRedirectDowngrade) is true).
 func WithAllowRedirectDowngrade() Option {
 	return func(o *options) { o.allowDowngrade = true }
 }
@@ -300,7 +301,7 @@ func mustParsePrefixes(cidrs ...string) []netip.Prefix {
 	return prefixes
 }
 
-// newDialer は options から接続用の Dialer を生成します。
+// newDialer builds the Dialer used to connect from the options.
 func (o *options) newDialer(timeout time.Duration) *net.Dialer {
 	if o.dialer != nil {
 		return o.dialer
